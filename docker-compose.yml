@@ -7,6 +7,27 @@ services:
       ADDR: ":8080"
       DOWNLOAD_DIR: "/app/downloads"
       DOUYIN_COOKIE: "${DOUYIN_COOKIE:-}"
+      AUTO_LOCALIZE: "${AUTO_LOCALIZE:-true}"
+      WHISPER_MODEL: "${WHISPER_MODEL:-small}"
+      WHISPER_DEVICE: "${WHISPER_DEVICE:-cpu}"
+      WHISPER_COMPUTE_TYPE: "${WHISPER_COMPUTE_TYPE:-int8}"
+      TRANSLATE_PROVIDER: "${TRANSLATE_PROVIDER:-ollama}"
+      OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://host.docker.internal:11434}"
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-qwen2.5:3b}"
+      OPENAI_COMPAT_BASE_URL: "${OPENAI_COMPAT_BASE_URL:-}"
+      OPENAI_COMPAT_MODEL: "${OPENAI_COMPAT_MODEL:-}"
+      OPENAI_COMPAT_API_KEY: "${OPENAI_COMPAT_API_KEY:-}"
+      TTS_VOICE: "${TTS_VOICE:-vi-VN-HoaiMyNeural}"
+      TTS_RATE: "${TTS_RATE:-+0%}"
+      TTS_MAX_SPEED: "${TTS_MAX_SPEED:-2.0}"
+      BURN_SUBTITLES: "${BURN_SUBTITLES:-true}"
+      ORIGINAL_AUDIO_VOLUME: "${ORIGINAL_AUDIO_VOLUME:-0.08}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./downloads:/app/downloads
+      - whisper-cache:/root/.cache
     restart: unless-stopped
+
+volumes:
+  whisper-cache:
