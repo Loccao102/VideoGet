@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -18,12 +19,14 @@ type Result struct {
 	OutputVideo        string `json:"outputVideo,omitempty"`
 	DetectedLanguage   string `json:"detectedLanguage,omitempty"`
 	Segments           int    `json:"segments,omitempty"`
+	SkippedReason      string `json:"skippedReason,omitempty"`
 }
 
 type Processor struct {
 	enabled bool
 	python  string
 	script  string
+	sem     chan struct{}
 }
 
 func NewFromEnv() *Processor {
@@ -42,14 +45,36 @@ func NewFromEnv() *Processor {
 
 	script := strings.TrimSpace(os.Getenv("LOCALIZE_SCRIPT"))
 	if script == "" {
-		if _, err := os.Stat("/app/scripts/localize.py"); err == nil {
-			script = "/app/scripts/localize.py"
-		} else {
+		candidates := []string{
+			"/app/scripts/localize_fast.py",
+			"/app/scripts/localize.py",
+			filepath.FromSlash("scripts/localize_fast.py"),
+			filepath.FromSlash("scripts/localize.py"),
+		}
+		for _, candidate := range candidates {
+			if _, err := os.Stat(candidate); err == nil {
+				script = candidate
+				break
+			}
+		}
+		if script == "" {
 			script = filepath.FromSlash("scripts/localize.py")
 		}
 	}
 
-	return &Processor{enabled: enabled, python: python, script: script}
+	concurrency := 1
+	if raw := strings.TrimSpace(os.Getenv("LOCALIZE_CONCURRENCY")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			concurrency = parsed
+		}
+	}
+
+	return &Processor{
+		enabled: enabled,
+		python:  python,
+		script:  script,
+		sem:     make(chan struct{}, concurrency),
+	}
 }
 
 func (p *Processor) Enabled() bool { return p != nil && p.enabled }
@@ -85,6 +110,13 @@ func (p *Processor) Process(ctx context.Context, input string) (Result, error) {
 	}
 	if _, err := os.Stat(input); err != nil {
 		return Result{}, fmt.Errorf("input video does not exist: %w", err)
+	}
+
+	select {
+	case p.sem <- struct{}{}:
+		defer func() { <-p.sem }()
+	case <-ctx.Done():
+		return Result{}, ctx.Err()
 	}
 
 	outputDir := filepath.Join(filepath.Dir(input), "localized")
