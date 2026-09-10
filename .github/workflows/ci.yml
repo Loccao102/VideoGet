@@ -13,17 +13,13 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.23.x'
-          cache: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Resolve Go modules
+      - name: Verify Go module lock
         run: |
           go mod tidy
-          echo '--- GO.MOD ---'
-          cat go.mod
-          echo '--- GO.SUM ---'
-          cat go.sum
+          git diff --exit-code -- go.mod go.sum
       - run: go vet ./...
       - run: go test ./...
       - run: go build ./...
