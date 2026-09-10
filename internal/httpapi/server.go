@@ -40,6 +40,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/download", s.download)
 	mux.HandleFunc("GET /api/jobs", s.listJobs)
 	mux.HandleFunc("GET /api/jobs/{id}", s.getJob)
+	mux.HandleFunc("POST /api/jobs/{id}/retry", s.retryJob)
 	if s.web != nil {
 		mux.Handle("/", http.FileServer(http.FS(s.web)))
 	}
@@ -59,6 +60,7 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 		"status":       "ok",
 		"providers":    providers,
 		"localization": s.jobs.LocalizationStatus(),
+		"persistence":  s.jobs.PersistenceStatus(),
 		"time":         time.Now().UTC(),
 	})
 }
@@ -184,6 +186,19 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 	job, err := s.jobs.Start(req.Video)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, job)
+}
+
+func (s *Server) retryJob(w http.ResponseWriter, r *http.Request) {
+	job, err := s.jobs.Retry(r.PathValue("id"))
+	if err != nil {
+		status := http.StatusConflict
+		if strings.Contains(err.Error(), "not found") {
+			status = http.StatusNotFound
+		}
+		writeError(w, status, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusAccepted, job)
