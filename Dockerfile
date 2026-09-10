@@ -4,6 +4,8 @@ RUN cargo install douyin-cli --locked --root /opt/douyin
 FROM golang:1.26-bookworm AS go-builder
 WORKDIR /src
 RUN go install github.com/tamnd/bilibili-cli/cmd/bili@v0.3.0
+COPY go.mod ./
+RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/videoget .
 
