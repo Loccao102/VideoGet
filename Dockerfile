@@ -6,14 +6,44 @@ WORKDIR /src
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/videoget .
 
-FROM python:3.13-slim-bookworm
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg nodejs && rm -rf /var/lib/apt/lists/* && pip install --no-cache-dir yt-dlp==2026.8.19
+FROM python:3.12-slim-bookworm
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        ffmpeg \
+        fonts-noto-core \
+        nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir \
+    yt-dlp==2026.8.19 \
+    faster-whisper \
+    edge-tts \
+    pydub
+
 COPY --from=douyin-builder /opt/douyin/bin/douyin /usr/local/bin/douyin
 COPY --from=go-builder /out/videoget /usr/local/bin/videoget
+COPY scripts /app/scripts
+
 WORKDIR /app
-RUN mkdir -p /app/downloads
-ENV ADDR=:8080 DOWNLOAD_DIR=/app/downloads
+RUN mkdir -p /app/downloads /root/.cache
+
+ENV ADDR=:8080 \
+    DOWNLOAD_DIR=/app/downloads \
+    AUTO_LOCALIZE=true \
+    LOCALIZE_SCRIPT=/app/scripts/localize.py \
+    WHISPER_MODEL=small \
+    WHISPER_DEVICE=cpu \
+    WHISPER_COMPUTE_TYPE=int8 \
+    TRANSLATE_PROVIDER=ollama \
+    OLLAMA_BASE_URL=http://host.docker.internal:11434 \
+    OLLAMA_MODEL=qwen2.5:3b \
+    TTS_VOICE=vi-VN-HoaiMyNeural \
+    BURN_SUBTITLES=true \
+    ORIGINAL_AUDIO_VOLUME=0.08
+
 EXPOSE 8080
-VOLUME ["/app/downloads"]
+VOLUME ["/app/downloads", "/root/.cache"]
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD curl -fsS http://127.0.0.1:8080/api/health || exit 1
 CMD ["videoget"]
