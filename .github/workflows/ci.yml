@@ -17,7 +17,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: go mod download
+      - name: Resolve Go modules
+        run: |
+          go mod tidy
+          echo '--- GO.MOD ---'
+          cat go.mod
+          echo '--- GO.SUM ---'
+          cat go.sum
       - run: go vet ./...
       - run: go test ./...
       - run: go build ./...
