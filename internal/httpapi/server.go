@@ -88,8 +88,9 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 	}
 
 	keywords := []string{req.Keyword}
+	var expansionErr error
 	if req.Expand {
-		keywords = discovery.Expand(req.Keyword)
+		keywords, expansionErr = discovery.ExpandContext(r.Context(), req.Keyword)
 	}
 	if len(keywords) == 0 {
 		keywords = []string{req.Keyword}
@@ -149,6 +150,9 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 		Keywords: keywords,
 		Results:  []model.Video{},
 		Errors:   map[string]string{},
+	}
+	if expansionErr != nil {
+		response.Errors["keyword_expander"] = expansionErr.Error() + "; static fallback was used"
 	}
 	for result := range results {
 		if result.err != nil {
