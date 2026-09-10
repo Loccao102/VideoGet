@@ -12,8 +12,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Loccao102/VideoGet/internal/discovery"
 	"github.com/Loccao102/VideoGet/internal/download"
 	"github.com/Loccao102/VideoGet/internal/model"
+	"github.com/Loccao102/VideoGet/internal/ranking"
 	"github.com/Loccao102/VideoGet/internal/source"
 )
 
@@ -73,7 +75,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Limit <= 0 {
-		req.Limit = 20
+		req.Limit = 30
 	}
 	if req.Limit > 100 {
 		req.Limit = 100
@@ -85,34 +87,57 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 		sort.Strings(req.Sources)
 	}
 
+	keywords := []string{req.Keyword}
+	if req.Expand {
+		keywords = discovery.Expand(req.Keyword)
+	}
+	if len(keywords) == 0 {
+		keywords = []string{req.Keyword}
+	}
+	perQueryLimit := (req.Limit + len(keywords) - 1) / len(keywords)
+	if perQueryLimit < 10 {
+		perQueryLimit = 10
+	}
+
 	type providerResult struct {
-		name   string
+		key    string
 		videos []model.Video
 		err    error
 	}
-	results := make(chan providerResult, len(req.Sources))
-	var wg sync.WaitGroup
-	seen := map[string]struct{}{}
 
+	uniqueSources := make([]string, 0, len(req.Sources))
+	seenSources := map[string]struct{}{}
 	for _, raw := range req.Sources {
 		name := strings.ToLower(strings.TrimSpace(raw))
-		if _, ok := seen[name]; ok {
+		if name == "" {
 			continue
 		}
-		seen[name] = struct{}{}
+		if _, ok := seenSources[name]; ok {
+			continue
+		}
+		seenSources[name] = struct{}{}
+		uniqueSources = append(uniqueSources, name)
+	}
+
+	results := make(chan providerResult, len(uniqueSources)*len(keywords))
+	var wg sync.WaitGroup
+	for _, name := range uniqueSources {
 		provider, ok := s.providers[name]
 		if !ok {
-			results <- providerResult{name: name, err: fmt.Errorf("unknown source")}
+			results <- providerResult{key: name, err: fmt.Errorf("unknown source")}
 			continue
 		}
-		wg.Add(1)
-		go func(name string, provider source.Provider) {
-			defer wg.Done()
-			ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
-			defer cancel()
-			videos, err := provider.Search(ctx, req.Keyword, req.Limit)
-			results <- providerResult{name: name, videos: videos, err: err}
-		}(name, provider)
+		for _, keyword := range keywords {
+			keyword := keyword
+			wg.Add(1)
+			go func(name string, provider source.Provider) {
+				defer wg.Done()
+				ctx, cancel := context.WithTimeout(r.Context(), 75*time.Second)
+				defer cancel()
+				videos, err := provider.Search(ctx, keyword, perQueryLimit)
+				results <- providerResult{key: name + ":" + keyword, videos: videos, err: err}
+			}(name, provider)
+		}
 	}
 	go func() {
 		wg.Wait()
@@ -120,16 +145,23 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	response := model.SearchResponse{
-		Keyword: req.Keyword,
-		Results: []model.Video{},
-		Errors:  map[string]string{},
+		Keyword:  req.Keyword,
+		Keywords: keywords,
+		Results:  []model.Video{},
+		Errors:   map[string]string{},
 	}
 	for result := range results {
 		if result.err != nil {
-			response.Errors[result.name] = result.err.Error()
-		} else {
-			response.Results = append(response.Results, result.videos...)
+			response.Errors[result.key] = result.err.Error()
+			continue
 		}
+		response.Results = append(response.Results, result.videos...)
+	}
+
+	response.Results = ranking.Deduplicate(response.Results)
+	response.Results = ranking.Rank(response.Results, req.Keyword, req.Sort, req.Filters, time.Now().UTC())
+	if len(response.Results) > req.Limit {
+		response.Results = response.Results[:req.Limit]
 	}
 	if len(response.Errors) == 0 {
 		response.Errors = nil
