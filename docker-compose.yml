@@ -7,6 +7,7 @@ services:
       ADDR: ":8080"
       DOWNLOAD_DIR: "/app/downloads"
       DOUYIN_COOKIE: "${DOUYIN_COOKIE:-}"
+      KEYWORD_EXPANDER: "${KEYWORD_EXPANDER:-ollama}"
       AUTO_LOCALIZE: "${AUTO_LOCALIZE:-true}"
       WHISPER_MODEL: "${WHISPER_MODEL:-small}"
       WHISPER_DEVICE: "${WHISPER_DEVICE:-cpu}"
