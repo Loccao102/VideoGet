@@ -1,8 +1,9 @@
 FROM rust:1.88-bookworm AS douyin-builder
 RUN cargo install douyin-cli --locked --root /opt/douyin
 
-FROM golang:1.23-bookworm AS go-builder
+FROM golang:1.26-bookworm AS go-builder
 WORKDIR /src
+RUN go install github.com/tamnd/bilibili-cli/cmd/bili@v0.3.0
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/videoget .
 
@@ -23,6 +24,7 @@ RUN pip install --no-cache-dir \
     pydub
 
 COPY --from=douyin-builder /opt/douyin/bin/douyin /usr/local/bin/douyin
+COPY --from=go-builder /go/bin/bili /usr/local/bin/bili
 COPY --from=go-builder /out/videoget /usr/local/bin/videoget
 COPY scripts /app/scripts
 
@@ -31,6 +33,10 @@ RUN mkdir -p /app/downloads /root/.cache
 
 ENV ADDR=:8080 \
     DOWNLOAD_DIR=/app/downloads \
+    BILIBILI_BIN=bili \
+    BILIBILI_SEARCH_DELAY_MS=1200 \
+    BILIBILI_REQUEST_RATE=800ms \
+    BILIBILI_RETRIES=2 \
     AUTO_LOCALIZE=true \
     LOCALIZE_SCRIPT=/app/scripts/localize.py \
     WHISPER_MODEL=small \
