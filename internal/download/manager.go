@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,6 +39,7 @@ type Job struct {
 	Output       string           `json:"output,omitempty"`
 	Localization *localize.Result `json:"localization,omitempty"`
 	Error        string           `json:"error,omitempty"`
+	Attempts     int              `json:"attempts"`
 	CreatedAt    time.Time        `json:"createdAt"`
 	UpdatedAt    time.Time        `json:"updatedAt"`
 }
@@ -47,38 +49,127 @@ type Manager struct {
 	jobs        map[string]Job
 	downloadDir string
 	localizer   *localize.Processor
+	store       *jobStore
+	downloadSem chan struct{}
 }
 
-func NewManager(downloadDir string) *Manager {
+func NewManager(downloadDir string) (*Manager, error) {
 	if strings.TrimSpace(downloadDir) == "" {
 		downloadDir = "downloads"
 	}
-	return &Manager{
-		jobs:        map[string]Job{},
+	if err := os.MkdirAll(downloadDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create download directory: %w", err)
+	}
+
+	dbPath := strings.TrimSpace(os.Getenv("JOB_DB_PATH"))
+	if dbPath == "" {
+		dbPath = filepath.Join(downloadDir, "videoget.db")
+	}
+	store, err := openJobStore(dbPath)
+	if err != nil {
+		return nil, err
+	}
+
+	persisted, err := store.LoadAll()
+	if err != nil {
+		_ = store.Close()
+		return nil, err
+	}
+
+	m := &Manager{
+		jobs:        make(map[string]Job, len(persisted)),
 		downloadDir: downloadDir,
 		localizer:   localize.NewFromEnv(),
+		store:       store,
+		downloadSem: make(chan struct{}, envPositiveInt("DOWNLOAD_CONCURRENCY", 3)),
 	}
+
+	resume := make([]string, 0)
+	for _, job := range persisted {
+		if job.Attempts <= 0 {
+			job.Attempts = 1
+		}
+		switch job.Status {
+		case JobQueued, JobDownloading, JobLocalizing:
+			// The process disappeared while this job was active. Re-queue it; run()
+			// will reuse SourceOutput when the completed source media still exists.
+			job.Status = JobQueued
+			job.UpdatedAt = time.Now().UTC()
+			resume = append(resume, job.ID)
+			if err := store.Upsert(job); err != nil {
+				_ = store.Close()
+				return nil, err
+			}
+		}
+		m.jobs[job.ID] = job
+	}
+
+	for _, id := range resume {
+		go m.run(id)
+	}
+	if len(resume) > 0 {
+		log.Printf("resuming %d interrupted VideoGet job(s) from SQLite", len(resume))
+	}
+	return m, nil
+}
+
+func (m *Manager) Close() error {
+	if m == nil || m.store == nil {
+		return nil
+	}
+	return m.store.Close()
 }
 
 func (m *Manager) Start(video model.Video) (Job, error) {
 	if video.URL == "" || video.Platform == "" {
 		return Job{}, fmt.Errorf("platform and url are required")
 	}
-	if err := os.MkdirAll(m.downloadDir, 0o755); err != nil {
-		return Job{}, err
-	}
 	now := time.Now().UTC()
 	job := Job{
 		ID:        newID(),
 		Status:    JobQueued,
 		Video:     video,
+		Attempts:  1,
 		CreatedAt: now,
 		UpdatedAt: now,
+	}
+	if err := m.store.Upsert(job); err != nil {
+		return Job{}, err
 	}
 	m.mu.Lock()
 	m.jobs[job.ID] = job
 	m.mu.Unlock()
 	go m.run(job.ID)
+	return job, nil
+}
+
+func (m *Manager) Retry(id string) (Job, error) {
+	m.mu.Lock()
+	job, ok := m.jobs[id]
+	if !ok {
+		m.mu.Unlock()
+		return Job{}, fmt.Errorf("job not found")
+	}
+	switch job.Status {
+	case JobQueued, JobDownloading, JobLocalizing:
+		m.mu.Unlock()
+		return Job{}, fmt.Errorf("job is already running")
+	case JobDone:
+		m.mu.Unlock()
+		return Job{}, fmt.Errorf("job is already complete")
+	}
+	job.Status = JobQueued
+	job.Error = ""
+	job.Localization = nil
+	job.Attempts++
+	job.UpdatedAt = time.Now().UTC()
+	m.jobs[id] = job
+	m.mu.Unlock()
+
+	if err := m.store.Upsert(job); err != nil {
+		return Job{}, err
+	}
+	go m.run(id)
 	return job, nil
 }
 
@@ -91,11 +182,12 @@ func (m *Manager) Get(id string) (Job, bool) {
 
 func (m *Manager) List() []Job {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
 	out := make([]Job, 0, len(m.jobs))
 	for _, job := range m.jobs {
 		out = append(out, job)
 	}
+	m.mu.RUnlock()
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
 	return out
 }
 
@@ -112,15 +204,32 @@ func (m *Manager) LocalizationStatus() map[string]any {
 	return status
 }
 
+func (m *Manager) PersistenceStatus() map[string]any {
+	m.mu.RLock()
+	count := len(m.jobs)
+	m.mu.RUnlock()
+	status := map[string]any{"enabled": m.store != nil, "jobs": count}
+	if m.store != nil {
+		status["path"] = m.store.path
+	}
+	return status
+}
+
 func (m *Manager) update(id string, fn func(*Job)) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	job, ok := m.jobs[id]
 	if !ok {
+		m.mu.Unlock()
 		return
 	}
 	fn(&job)
 	m.jobs[id] = job
+	m.mu.Unlock()
+	if m.store != nil {
+		if err := m.store.Upsert(job); err != nil {
+			log.Printf("persist job %s: %v", id, err)
+		}
+	}
 }
 
 func (m *Manager) run(id string) {
@@ -135,29 +244,48 @@ func (m *Manager) run(id string) {
 		return
 	}
 
-	m.update(id, func(job *Job) {
-		job.Status = JobDownloading
-		job.UpdatedAt = time.Now().UTC()
-	})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Minute)
+	timeout := time.Duration(envPositiveInt("JOB_TIMEOUT_MINUTES", 180)) * time.Minute
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	sourceOutput, err := m.download(ctx, job.Video, jobDir)
-	if err != nil {
-		m.fail(id, JobFailed, err)
-		return
+	sourceOutput := strings.TrimSpace(job.SourceOutput)
+	if !reusableSource(sourceOutput) {
+		select {
+		case m.downloadSem <- struct{}{}:
+		case <-ctx.Done():
+			m.fail(id, JobFailed, ctx.Err())
+			return
+		}
+		m.update(id, func(job *Job) {
+			job.Status = JobDownloading
+			job.Error = ""
+			job.UpdatedAt = time.Now().UTC()
+		})
+		downloaded, err := m.download(ctx, job.Video, jobDir)
+		<-m.downloadSem
+		if err != nil {
+			m.fail(id, JobFailed, err)
+			return
+		}
+		if !hasAudioStream(downloaded) {
+			m.fail(id, JobFailed, fmt.Errorf("downloaded media has no audio stream: %s", downloaded))
+			return
+		}
+		sourceOutput = downloaded
+		m.update(id, func(job *Job) {
+			job.SourceOutput = sourceOutput
+			job.Output = sourceOutput
+			job.Error = ""
+			job.UpdatedAt = time.Now().UTC()
+		})
+	} else {
+		log.Printf("job %s reusing downloaded source %s", id, sourceOutput)
 	}
-
-	m.update(id, func(job *Job) {
-		job.SourceOutput = sourceOutput
-		job.Output = sourceOutput
-		job.UpdatedAt = time.Now().UTC()
-	})
 
 	if m.localizer == nil || !m.localizer.Enabled() {
 		m.update(id, func(job *Job) {
 			job.Status = JobDone
+			job.Output = sourceOutput
 			job.UpdatedAt = time.Now().UTC()
 		})
 		return
@@ -165,6 +293,7 @@ func (m *Manager) run(id string) {
 
 	m.update(id, func(job *Job) {
 		job.Status = JobLocalizing
+		job.Error = ""
 		job.UpdatedAt = time.Now().UTC()
 	})
 
@@ -182,9 +311,21 @@ func (m *Manager) run(id string) {
 	m.update(id, func(job *Job) {
 		job.Status = JobDone
 		job.Localization = &result
+		job.Error = ""
 		job.Output = result.OutputVideo
 		job.UpdatedAt = time.Now().UTC()
 	})
+}
+
+func reusableSource(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() || info.Size() == 0 {
+		return false
+	}
+	return hasAudioStream(path)
 }
 
 func (m *Manager) fail(id string, status JobStatus, err error) {
