@@ -1,36 +1,51 @@
 # VideoGet
 
-VideoGet là hệ thống tìm video theo từ khóa trên **Bilibili + Douyin**, xem metadata, tải video đã chọn rồi tự động **nhận giọng → tạo subtitle → dịch sang tiếng Việt → tạo voice tiếng Việt → render video Việt hóa**.
-
-## Pipeline hiện tại
+VideoGet là hệ thống **Affiliate Trend Hunter + Video Localization** cho Douyin/Bilibili:
 
 ```text
-Keyword
-  -> Bilibili / Douyin search
-  -> metadata results
-  -> select video
+chủ đề tiếng Việt
+  -> mở rộng keyword Trung
+  -> search nhiều nguồn
+  -> deduplicate
+  -> filter
+  -> trend/relevance scoring
+  -> chọn Top N
   -> download
-  -> faster-whisper STT
-  -> subtitle gốc (.srt)
-  -> dịch từng segment sang tiếng Việt
-  -> subtitle tiếng Việt (.vi.srt)
+  -> faster-whisper
+  -> subtitle gốc
+  -> dịch tiếng Việt
   -> Vietnamese TTS
-  -> timeline alignment
   -> FFmpeg render
   -> video.vi-dubbed.mp4
 ```
 
-Mỗi job được tách riêng trong `downloads/<job-id>/` để nhiều video có thể chạy song song mà không giẫm file lên nhau.
+## Tính năng hiện tại
 
-## Thành phần
+- Search theo keyword trên **Bilibili + Douyin**.
+- Keyword expander deterministic cho một số ngách affiliate phổ biến.
+- Tùy chọn dùng **Ollama** để sinh thêm keyword tiếng Trung cho chủ đề bất kỳ.
+- Search đồng thời nhiều keyword/nhiều source.
+- Deduplicate candidate theo platform + video ID.
+- Filter theo min likes, thời gian đăng và thời lượng video.
+- Chấm `engagement`, `recency`, `relevance`, `trend`, `overall` score.
+- Sort theo Affiliate score / mới nhất / likes / views.
+- Auto queue Top 3/5/10 hoặc chọn thủ công.
+- Download video theo job riêng.
+- Tự động nhận giọng → sub → dịch → voice Việt → render.
 
-- **Go**: HTTP API, source adapters, job orchestration.
-- **yt-dlp**: search/download Bilibili.
-- **douyin-cli**: search/download Douyin.
-- **faster-whisper**: speech-to-text local.
-- **Ollama hoặc OpenAI-compatible endpoint**: dịch subtitle sang tiếng Việt.
-- **edge-tts**: tạo giọng tiếng Việt.
-- **FFmpeg**: tách audio, căn voice theo timeline, mix audio và hard-sub.
+## Affiliate score
+
+Bản V1 dùng heuristic có thể giải thích được:
+
+```text
+engagement = log(likes + 2*comments + 3*shares + 0.01*views)
+recency    = exponential decay theo tuổi video
+velocity   = engagement / age_hours
+trend      = 45% engagement + 35% recency + 20% velocity
+overall    = 50% trend + 30% relevance + 20% engagement
+```
+
+Đây là **ranking nội bộ giữa các candidate đã crawl**, không phải số liệu chính thức của Douyin/Bilibili.
 
 ## Chạy bằng Docker
 
@@ -38,44 +53,36 @@ Mỗi job được tách riêng trong `downloads/<job-id>/` để nhiều video 
 cp .env.example .env
 ```
 
-### 1. Douyin
+### Douyin Cookie
 
-Nếu chỉ dùng Bilibili thì có thể để `DOUYIN_COOKIE` trống. Để search Douyin, đăng nhập Douyin trên trình duyệt của bạn rồi đặt Cookie hiện tại vào `.env`:
+Để search/download Douyin, đăng nhập Douyin trên browser và đặt cookie hiện tại vào `.env`:
 
 ```dotenv
 DOUYIN_COOKIE=your_cookie_here
 ```
 
-Không commit Cookie thật lên GitHub.
+Không commit cookie thật lên GitHub.
 
-### 2. Ollama để dịch sang tiếng Việt
+### Ollama
 
-Mặc định VideoGet gọi Ollama trên máy host:
+Mặc định Ollama được dùng cho **keyword expansion + dịch subtitle**:
 
 ```dotenv
+KEYWORD_EXPANDER=ollama
 TRANSLATE_PROVIDER=ollama
 OLLAMA_BASE_URL=http://host.docker.internal:11434
 OLLAMA_MODEL=qwen2.5:3b
 ```
 
-Cài/pull model trước khi chạy job Việt hóa:
+Chuẩn bị model:
 
 ```bash
 ollama pull qwen2.5:3b
 ```
 
-Bạn có thể đổi sang model khác bằng `OLLAMA_MODEL`.
+Nếu Ollama keyword expansion lỗi, VideoGet vẫn search bằng keyword gốc + bộ mapping deterministic.
 
-Nếu muốn dùng một API tương thích OpenAI thay cho Ollama:
-
-```dotenv
-TRANSLATE_PROVIDER=openai_compatible
-OPENAI_COMPAT_BASE_URL=http://your-endpoint/v1
-OPENAI_COMPAT_MODEL=your-model
-OPENAI_COMPAT_API_KEY=your-key
-```
-
-### 3. Start
+### Start
 
 ```bash
 docker compose up --build
@@ -87,17 +94,84 @@ Mở:
 http://localhost:8080
 ```
 
-Ở lần Việt hóa đầu tiên, `faster-whisper` sẽ tải model đã chọn và cache vào Docker volume `whisper-cache`.
+## Search API
 
-`edge-tts` cần kết nối Internet để tổng hợp giọng nói. Mặc định voice là:
+```http
+POST /api/search
+Content-Type: application/json
 
-```dotenv
-TTS_VOICE=vi-VN-HoaiMyNeural
+{
+  "keyword": "đồ bếp",
+  "sources": ["douyin", "bilibili"],
+  "limit": 30,
+  "expand": true,
+  "sort": "rank",
+  "filters": {
+    "minLikes": 100,
+    "maxDurationSec": 180,
+    "publishedWithinDays": 7
+  }
+}
 ```
 
-## Output của một job
+Response trả thêm các keyword thực sự đã crawl:
 
-Ví dụ:
+```json
+{
+  "keyword": "đồ bếp",
+  "keywords": ["đồ bếp", "厨房好物", "厨房神器"],
+  "results": [
+    {
+      "id": "...",
+      "platform": "douyin",
+      "title": "...",
+      "likes": 12000,
+      "scores": {
+        "engagement": 87.3,
+        "recency": 95.1,
+        "relevance": 75,
+        "trend": 89.2,
+        "overall": 84.5
+      }
+    }
+  ]
+}
+```
+
+## Download + Việt hóa
+
+```http
+POST /api/download
+Content-Type: application/json
+
+{
+  "video": {
+    "id": "...",
+    "platform": "douyin",
+    "title": "Example",
+    "url": "https://www.douyin.com/video/..."
+  }
+}
+```
+
+Khi `AUTO_LOCALIZE=true`:
+
+```text
+queued
+ -> downloading
+ -> localizing
+ -> done
+```
+
+Nếu phần Việt hóa lỗi nhưng video đã tải xong:
+
+```text
+localization_failed
+```
+
+Video gốc vẫn được giữ lại.
+
+## Output
 
 ```text
 downloads/
@@ -111,126 +185,61 @@ downloads/
       original-video.localization.json
 ```
 
-`localization.json` chứa timestamp, transcript gốc và bản dịch từng segment để sau này editor/AI agent có thể xử lý tiếp.
-
-## Job status
-
-```text
-queued
-  -> downloading
-  -> localizing
-  -> done
-```
-
-Nếu download thành công nhưng phần sub/voice lỗi:
-
-```text
-localization_failed
-```
-
-Video gốc vẫn được giữ lại trong `sourceOutput`.
-
-## API
-
-### Search
-
-```http
-POST /api/search
-Content-Type: application/json
-
-{
-  "keyword": "AI Agent",
-  "sources": ["bilibili", "douyin"],
-  "limit": 20
-}
-```
-
-Search chỉ lấy metadata, chưa tải media.
-
-### Download + tự Việt hóa
-
-```http
-POST /api/download
-Content-Type: application/json
-
-{
-  "video": {
-    "id": "BV...",
-    "platform": "bilibili",
-    "title": "Example",
-    "url": "https://www.bilibili.com/video/BV..."
-  }
-}
-```
-
-Khi `AUTO_LOCALIZE=true`, job tự chạy toàn bộ pipeline sau download.
-
-### Job status
-
-```http
-GET /api/jobs
-GET /api/jobs/{id}
-```
-
-Response hoàn tất có thêm:
-
-```json
-{
-  "status": "done",
-  "sourceOutput": "downloads/.../source.mp4",
-  "output": "downloads/.../localized/source.vi-dubbed.mp4",
-  "localization": {
-    "originalSubtitle": "...original.srt",
-    "vietnameseSubtitle": "...vi.srt",
-    "voiceTrack": "...vi-voice.wav",
-    "outputVideo": "...vi-dubbed.mp4",
-    "detectedLanguage": "zh",
-    "segments": 24
-  }
-}
-```
-
-## Environment
+## Environment chính
 
 | Variable | Default | Ý nghĩa |
 |---|---|---|
-| `ADDR` | `:8080` | HTTP listen address |
-| `DOWNLOAD_DIR` | `downloads` | thư mục chứa video/job |
-| `DOUYIN_COOKIE` | trống | Cookie Douyin của phiên đăng nhập |
+| `DOUYIN_COOKIE` | trống | cookie Douyin |
+| `KEYWORD_EXPANDER` | `ollama` | `ollama` hoặc `off` |
 | `AUTO_LOCALIZE` | `true` | tự Việt hóa sau download |
-| `WHISPER_MODEL` | `small` | model faster-whisper |
-| `WHISPER_DEVICE` | `cpu` | `cpu` hoặc `cuda` nếu image/runtime phù hợp |
-| `WHISPER_COMPUTE_TYPE` | `int8` | compute type của faster-whisper |
-| `TRANSLATE_PROVIDER` | `ollama` | `ollama`, `openai`, `openai_compatible` |
+| `WHISPER_MODEL` | `small` | faster-whisper model |
+| `TRANSLATE_PROVIDER` | `ollama` | provider dịch |
 | `OLLAMA_BASE_URL` | `http://host.docker.internal:11434` | Ollama endpoint |
-| `OLLAMA_MODEL` | `qwen2.5:3b` | model dịch |
+| `OLLAMA_MODEL` | `qwen2.5:3b` | model dùng cho AI task |
 | `TTS_VOICE` | `vi-VN-HoaiMyNeural` | voice tiếng Việt |
-| `TTS_RATE` | `+0%` | tốc độ TTS cơ bản |
-| `TTS_MAX_SPEED` | `2.0` | mức tăng tốc tối đa khi voice dài hơn slot subtitle |
-| `BURN_SUBTITLES` | `true` | hard-sub tiếng Việt vào video |
-| `ORIGINAL_AUDIO_VOLUME` | `0.08` | âm lượng audio gốc dưới voice Việt; đặt `0` để bỏ hoàn toàn |
+| `BURN_SUBTITLES` | `true` | hard-sub vào video |
+| `ORIGINAL_AUDIO_VOLUME` | `0.08` | âm lượng audio gốc dưới voice Việt |
 
-## Lưu ý chất lượng
+## Kiến trúc
 
-Bản hiện tại dịch theo **segment Whisper**, vì vậy chạy được tự động và giữ timestamp tốt nhưng chưa phải dubbing cấp studio. Các bước nâng cấp hợp lý tiếp theo là:
+```text
+Browser UI
+   |
+   v
+Go API
+   |
+   +-- Discovery
+   |     +-- static keyword expander
+   |     +-- Ollama keyword expander
+   |
+   +-- Source adapters
+   |     +-- Douyin -> douyin-cli
+   |     +-- Bilibili -> yt-dlp
+   |
+   +-- Ranking
+   |     +-- dedupe
+   |     +-- filters
+   |     +-- trend/relevance score
+   |
+   +-- Download Manager
+         +-- isolated job directory
+         +-- faster-whisper
+         +-- translator
+         +-- edge-tts
+         +-- FFmpeg
+```
 
-- gom nhiều segment thành câu/đoạn theo ngữ nghĩa trước khi dịch;
-- voice cloning / chọn speaker theo giới tính;
-- source separation để giữ nhạc/ambient nhưng loại giọng gốc;
-- scene-aware subtitle formatting;
-- AI reviewer kiểm tra transcript, bản dịch và độ dài voice trước khi render;
-- retry riêng từng stage thay vì chạy lại cả job.
+## Hướng tiếp theo
+
+- AI analyzer đọc transcript/metadata và trả `product`, `pain point`, `selling point`, `hook`, `affiliate suitability`.
+- Lưu candidate + search history vào PostgreSQL.
+- Theo dõi cùng keyword hằng ngày để tính **trend velocity theo lịch sử**, thay vì chỉ scoring trong một lần crawl.
+- Demucs/source separation để bỏ voice gốc nhưng giữ nhạc/SFX.
+- Retry từng stage và queue Redis.
+- Matching sản phẩm tương đương từ sàn affiliate Việt Nam.
 
 ## Third-party
 
-VideoGet gọi/tích hợp các tool sau:
+VideoGet tích hợp/call các tool: `yt-dlp`, `douyin-cli`, `faster-whisper`, `edge-tts`, `FFmpeg`, Ollama hoặc OpenAI-compatible endpoint.
 
-- `yt-dlp`
-- `douyin-cli`
-- `faster-whisper`
-- `edge-tts`
-- `FFmpeg`
-
-`douyin-cli` upstream dùng AGPL-3.0. Hãy xem kỹ license và điều khoản nền tảng trước khi redistribute hoặc dùng thương mại.
-
-Chỉ tải và biến đổi nội dung bạn có quyền truy cập/sử dụng; tôn trọng điều khoản nền tảng, bản quyền và quyền riêng tư.
+`douyin-cli` upstream dùng AGPL-3.0. Hãy xem kỹ license và điều khoản nền tảng trước khi redistribute/dùng thương mại. Chỉ tải và biến đổi nội dung bạn có quyền sử dụng; tôn trọng bản quyền, quyền riêng tư và điều khoản nền tảng.
