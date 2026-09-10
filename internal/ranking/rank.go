@@ -122,6 +122,10 @@ func relevanceScore(video model.Video, query string) float64 {
 		if strings.Contains(haystack, token) { matched++ }
 	}
 	score := float64(matched) / float64(len(queryTokens))
+	// Results discovered through an expanded keyword inherit semantic relevance from the expander.
+	if source := strings.TrimSpace(video.SearchSource); source != "" && !strings.EqualFold(source, strings.TrimSpace(query)) {
+		score = math.Max(score, 0.75)
+	}
 	if strings.Contains(strings.ToLower(video.Title), strings.ToLower(strings.TrimSpace(query))) { score = math.Max(score, 1) }
 	return clamp01(score)
 }
