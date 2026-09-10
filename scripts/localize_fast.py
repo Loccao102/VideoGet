@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Performance wrapper around localize.py.
+"""Fast localization pipeline for VideoGet.
 
-Keeps the stable pipeline but replaces the slow/network-sensitive stages:
-- disables Qwen3 thinking for translation;
-- retries and splits failed translation batches;
+Optimizations:
+- disables Qwen3 thinking for subtitle translation;
+- retries and recursively splits failed translation batches;
 - groups subtitle segments before TTS and synthesizes groups concurrently;
-- treats no-speech videos as a successful skip instead of a failed job.
+- treats no-speech videos as a successful skip;
+- renders one final Vietnamese video with source-caption/logo cleanup and subtle color grading.
 """
 import asyncio
 import json
@@ -33,6 +34,13 @@ def env_float(name: str, default: float, minimum: float = 0.0) -> float:
         return max(minimum, float(os.getenv(name, str(default))))
     except ValueError:
         return max(minimum, default)
+
+
+def env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
 
 
 def ollama_base() -> str:
@@ -204,6 +212,137 @@ async def synthesize_segments(segments: list[dict], workdir: Path, total_ms: int
     return output
 
 
+def parse_regions(value: str) -> list[tuple[float, float, float, float]]:
+    regions = []
+    for raw in value.split(";"):
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            x, y, width, height = [float(item.strip()) for item in raw.split(",")]
+        except (ValueError, TypeError):
+            base.log(f"Bỏ qua VIDEO_LOGO_MASKS không hợp lệ: {raw}")
+            continue
+        x = max(0.0, min(0.98, x))
+        y = max(0.0, min(0.98, y))
+        width = max(0.01, min(1.0 - x, width))
+        height = max(0.01, min(1.0 - y, height))
+        regions.append((x, y, width, height))
+    return regions
+
+
+def add_blur_region(filters: list[str], input_label: str, index: int, region: tuple[float, float, float, float], radius: int) -> str:
+    x, y, width, height = region
+    base_label = f"maskbase{index}"
+    crop_label = f"maskcrop{index}"
+    blur_label = f"maskblur{index}"
+    output_label = f"maskout{index}"
+    filters.append(f"[{input_label}]split=2[{base_label}][{crop_label}]")
+    filters.append(
+        f"[{crop_label}]crop=w=iw*{width:.5f}:h=ih*{height:.5f}:x=iw*{x:.5f}:y=ih*{y:.5f},"
+        f"boxblur=luma_radius={radius}:luma_power=1:chroma_radius={max(1, radius//2)}:chroma_power=1[{blur_label}]"
+    )
+    filters.append(
+        f"[{base_label}][{blur_label}]overlay=x=main_w*{x:.5f}:y=main_h*{y:.5f}[{output_label}]"
+    )
+    return output_label
+
+
+def render_video(input_path: Path, voice_track: Path, vi_srt: Path, output_path: Path) -> None:
+    burn_subtitles = env_bool("BURN_SUBTITLES", True)
+    cleanup = env_bool("VIDEO_CLEANUP", True)
+    cleanup_source_subtitles = env_bool("VIDEO_CLEANUP_SOURCE_SUBTITLES", True)
+    cleanup_logos = env_bool("VIDEO_CLEANUP_LOGOS", True)
+    color_grade = env_bool("VIDEO_COLOR_GRADE", True)
+    original_volume = max(0.0, env_float("ORIGINAL_AUDIO_VOLUME", 0.08, 0.0))
+    source_has_audio = base.has_audio_stream(input_path)
+
+    cmd = ["ffmpeg", "-y", "-i", str(input_path), "-i", str(voice_track)]
+    filters: list[str] = []
+
+    if source_has_audio and original_volume > 0:
+        filters.append(f"[0:a]volume={original_volume}[original]")
+        filters.append("[original][1:a]amix=inputs=2:duration=longest:normalize=0[aout]")
+        audio_map = "[aout]"
+    else:
+        audio_map = "1:a:0"
+
+    video_label = "0:v"
+    mask_index = 0
+    if cleanup and cleanup_source_subtitles:
+        subtitle_region = (
+            env_float("VIDEO_SUBTITLE_MASK_X", 0.02),
+            env_float("VIDEO_SUBTITLE_MASK_Y", 0.72),
+            env_float("VIDEO_SUBTITLE_MASK_W", 0.96),
+            env_float("VIDEO_SUBTITLE_MASK_H", 0.24),
+        )
+        video_label = add_blur_region(
+            filters,
+            video_label,
+            mask_index,
+            subtitle_region,
+            env_int("VIDEO_SUBTITLE_BLUR", 14, 2),
+        )
+        mask_index += 1
+
+    if cleanup and cleanup_logos:
+        # Normalized x,y,w,h. Defaults cover common top-right/bottom-right platform watermark zones.
+        raw_masks = os.getenv(
+            "VIDEO_LOGO_MASKS",
+            "0.76,0.02,0.22,0.10;0.76,0.86,0.22,0.12",
+        )
+        for region in parse_regions(raw_masks):
+            video_label = add_blur_region(
+                filters,
+                video_label,
+                mask_index,
+                region,
+                env_int("VIDEO_LOGO_BLUR", 12, 2),
+            )
+            mask_index += 1
+
+    if color_grade:
+        graded = "vgraded"
+        contrast = env_float("VIDEO_CONTRAST", 1.04, 0.1)
+        saturation = env_float("VIDEO_SATURATION", 1.08, 0.0)
+        brightness = float(os.getenv("VIDEO_BRIGHTNESS", "0.01"))
+        filters.append(
+            f"[{video_label}]eq=contrast={contrast}:saturation={saturation}:brightness={brightness},"
+            "unsharp=5:5:0.35:5:5:0.0[vgraded]"
+        )
+        video_label = graded
+
+    if burn_subtitles:
+        escaped = base.escape_subtitle_path(vi_srt)
+        filters.append(
+            f"[{video_label}]subtitles='{escaped}':"
+            "force_style='FontName=Noto Sans,FontSize=20,Bold=1,PrimaryColour=&H00FFFFFF,"
+            "OutlineColour=&H00000000,BorderStyle=1,Outline=3,Shadow=0,MarginV=48,Alignment=2'[vout]"
+        )
+        video_map = "[vout]"
+    else:
+        video_map = f"[{video_label}]" if video_label != "0:v" else "0:v:0"
+
+    if filters:
+        cmd += ["-filter_complex", ";".join(filters)]
+    cmd += ["-map", video_map, "-map", audio_map]
+
+    # Cleanup/color/subtitle filters require re-encoding the video stream.
+    if filters:
+        cmd += [
+            "-c:v", "libx264",
+            "-preset", os.getenv("VIDEO_PRESET", "veryfast"),
+            "-crf", os.getenv("VIDEO_CRF", "21"),
+            "-pix_fmt", "yuv420p",
+        ]
+    else:
+        cmd += ["-c:v", "copy"]
+    cmd += ["-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-shortest", str(output_path)]
+
+    base.log("Đang render final video: cleanup chữ/logo -> color grade -> burn sub Việt...")
+    base.run(cmd)
+
+
 def input_arg() -> str:
     try:
         index = sys.argv.index("--input")
@@ -215,6 +354,7 @@ def input_arg() -> str:
 base.translate_batch_ollama = translate_batch_ollama
 base.translate_segments = translate_segments
 base.synthesize_segments = synthesize_segments
+base.render_video = render_video
 
 if __name__ == "__main__":
     try:
