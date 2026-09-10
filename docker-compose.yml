@@ -6,6 +6,9 @@ services:
     environment:
       ADDR: ":8080"
       DOWNLOAD_DIR: "/app/downloads"
+      JOB_DB_PATH: "${JOB_DB_PATH:-/app/downloads/videoget.db}"
+      DOWNLOAD_CONCURRENCY: "${DOWNLOAD_CONCURRENCY:-3}"
+      JOB_TIMEOUT_MINUTES: "${JOB_TIMEOUT_MINUTES:-180}"
       DOUYIN_COOKIE: "${DOUYIN_COOKIE:-}"
       BILIBILI_COOKIE: "${BILIBILI_COOKIE:-}"
       BILIBILI_BIN: "${BILIBILI_BIN:-bili}"
