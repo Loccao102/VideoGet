@@ -33,6 +33,9 @@ RUN mkdir -p /app/downloads /root/.cache
 
 ENV ADDR=:8080 \
     DOWNLOAD_DIR=/app/downloads \
+    JOB_DB_PATH=/app/downloads/videoget.db \
+    DOWNLOAD_CONCURRENCY=3 \
+    JOB_TIMEOUT_MINUTES=180 \
     BILIBILI_BIN=bili \
     BILIBILI_SEARCH_DELAY_MS=1200 \
     BILIBILI_REQUEST_RATE=800ms \
