@@ -15,7 +15,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/Loccao102/VideoGet/internal/model"
 )
@@ -27,103 +26,54 @@ type publicShortConfig struct {
 	acceptURL func(*url.URL) bool
 }
 
-type PublicShortProvider struct {
-	config publicShortConfig
-}
+type PublicShortProvider struct{ config publicShortConfig }
 
 func NewPublicShortProviders() []Provider {
 	configs := []publicShortConfig{
-		{
-			name:  "kuaishou",
-			query: "site:kuaishou.com/short-video",
-			hosts: []string{"kuaishou.com"},
-			acceptURL: func(u *url.URL) bool {
-				return strings.Contains(strings.ToLower(u.Path), "/short-video/")
-			},
-		},
-		{
-			name:  "xiaohongshu",
-			query: "site:xiaohongshu.com/explore",
-			hosts: []string{"xiaohongshu.com"},
-			acceptURL: func(u *url.URL) bool {
-				path := strings.ToLower(u.Path)
-				return strings.Contains(path, "/explore/") || strings.Contains(path, "/discovery/item/")
-			},
-		},
-		{
-			name:  "weibo",
-			query: "site:weibo.com/tv/show",
-			hosts: []string{"weibo.com"},
-			acceptURL: func(u *url.URL) bool {
-				path := strings.Trim(u.Path, "/")
-				if strings.Contains(strings.ToLower(u.Path), "/tv/show/") {
-					return true
-				}
-				parts := strings.Split(path, "/")
-				return len(parts) == 2 && allDigits(parts[0]) && alphaNumeric(parts[1])
-			},
-		},
-		{
-			name:  "xigua",
-			query: "site:ixigua.com 视频",
-			hosts: []string{"ixigua.com"},
-			acceptURL: func(u *url.URL) bool {
-				path := strings.Trim(u.Path, "/")
-				return len(path) >= 8 && allDigits(path)
-			},
-		},
-		{
-			name:  "haokan",
-			query: "site:haokan.baidu.com/v",
-			hosts: []string{"haokan.baidu.com"},
-			acceptURL: func(u *url.URL) bool {
-				return strings.TrimRight(strings.ToLower(u.Path), "/") == "/v" && strings.TrimSpace(u.Query().Get("vid")) != ""
-			},
-		},
-		{
-			name:  "toutiao",
-			query: "site:toutiao.com/video",
-			hosts: []string{"toutiao.com"},
-			acceptURL: func(u *url.URL) bool {
-				return strings.Contains(strings.ToLower(u.Path), "/video/")
-			},
-		},
-		{
-			name:  "acfun",
-			query: "site:acfun.cn/v/ac",
-			hosts: []string{"acfun.cn"},
-			acceptURL: func(u *url.URL) bool {
-				return strings.Contains(strings.ToLower(u.Path), "/v/ac")
-			},
-		},
-		{
-			name:  "meipai",
-			query: "site:meipai.com/media",
-			hosts: []string{"meipai.com"},
-			acceptURL: func(u *url.URL) bool {
-				return strings.Contains(strings.ToLower(u.Path), "/media/")
-			},
-		},
-		{
-			name:  "weishi",
-			query: "site:weishi.qq.com 视频",
-			hosts: []string{"weishi.qq.com"},
-			acceptURL: func(u *url.URL) bool {
-				path := strings.ToLower(u.Path)
-				return strings.Contains(path, "/t/") || strings.Contains(path, "/video/")
-			},
-		},
+		{"kuaishou", "site:kuaishou.com/short-video", []string{"kuaishou.com"}, func(u *url.URL) bool {
+			return strings.Contains(strings.ToLower(u.Path), "/short-video/")
+		}},
+		{"xiaohongshu", "site:xiaohongshu.com/explore", []string{"xiaohongshu.com"}, func(u *url.URL) bool {
+			p := strings.ToLower(u.Path)
+			return strings.Contains(p, "/explore/") || strings.Contains(p, "/discovery/item/")
+		}},
+		{"weibo", "site:weibo.com/tv/show", []string{"weibo.com"}, func(u *url.URL) bool {
+			if strings.Contains(strings.ToLower(u.Path), "/tv/show/") {
+				return true
+			}
+			parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+			return len(parts) == 2 && allDigits(parts[0]) && alphaNumeric(parts[1])
+		}},
+		{"xigua", "site:ixigua.com 视频", []string{"ixigua.com"}, func(u *url.URL) bool {
+			p := strings.Trim(u.Path, "/")
+			return len(p) >= 8 && allDigits(p)
+		}},
+		{"haokan", "site:haokan.baidu.com/v", []string{"haokan.baidu.com"}, func(u *url.URL) bool {
+			return strings.TrimRight(strings.ToLower(u.Path), "/") == "/v" && strings.TrimSpace(u.Query().Get("vid")) != ""
+		}},
+		{"toutiao", "site:toutiao.com/video", []string{"toutiao.com"}, func(u *url.URL) bool {
+			return strings.Contains(strings.ToLower(u.Path), "/video/")
+		}},
+		{"acfun", "site:acfun.cn/v/ac", []string{"acfun.cn"}, func(u *url.URL) bool {
+			return strings.Contains(strings.ToLower(u.Path), "/v/ac")
+		}},
+		{"meipai", "site:meipai.com/media", []string{"meipai.com"}, func(u *url.URL) bool {
+			return strings.Contains(strings.ToLower(u.Path), "/media/")
+		}},
+		{"weishi", "site:weishi.qq.com 视频", []string{"weishi.qq.com"}, func(u *url.URL) bool {
+			p := strings.ToLower(u.Path)
+			return strings.Contains(p, "/t/") || strings.Contains(p, "/video/")
+		}},
 	}
-
 	providers := make([]Provider, 0, len(configs))
-	for _, config := range configs {
-		providers = append(providers, &PublicShortProvider{config: config})
+	for _, cfg := range configs {
+		providers = append(providers, &PublicShortProvider{config: cfg})
 	}
 	return providers
 }
 
-func (p *PublicShortProvider) Name() string { return p.config.name }
-func (p *PublicShortProvider) Available() error { return nil }
+func (p *PublicShortProvider) Name() string       { return p.config.name }
+func (p *PublicShortProvider) Available() error   { return nil }
 
 func (p *PublicShortProvider) Search(ctx context.Context, keyword string, limit int) ([]model.Video, error) {
 	keyword = strings.TrimSpace(keyword)
@@ -136,43 +86,35 @@ func (p *PublicShortProvider) Search(ctx context.Context, keyword string, limit 
 	if limit > 50 {
 		limit = 50
 	}
-
 	query := strings.TrimSpace(p.config.query + " " + keyword)
-	var combined []indexedSearchItem
-	var errors []string
 
-	bing, err := publicIndexBing(ctx, query, limit)
-	if err != nil {
-		errors = append(errors, "bing="+err.Error())
+	var errs []string
+	var videos []model.Video
+	if items, err := publicIndexBing(ctx, query, limit); err != nil {
+		errs = append(errs, "bing="+err.Error())
 	} else {
-		combined = append(combined, bing...)
+		videos = appendUniqueVideos(videos, p.normalize(items, keyword, limit), limit)
 	}
 
-	if len(combined) < limit {
-		duck, err := publicIndexDuckDuckGo(ctx, query, limit)
-		if err != nil {
-			errors = append(errors, "duckduckgo="+err.Error())
+	// Search the second free index based on usable candidates, not raw result count.
+	if len(videos) < limit {
+		if items, err := publicIndexDuckDuckGo(ctx, query, limit); err != nil {
+			errs = append(errs, "duckduckgo="+err.Error())
 		} else {
-			combined = append(combined, duck...)
+			videos = appendUniqueVideos(videos, p.normalize(items, keyword, limit), limit)
 		}
 	}
-
-	videos := p.normalize(combined, keyword, limit)
 	if len(videos) > 0 {
 		return videos, nil
 	}
-	// Zero indexed results is a valid state and should not flood the UI with red errors.
-	// Only return an error if both public indexes themselves were unreachable/broken.
-	if len(errors) >= 2 {
-		return nil, fmt.Errorf("%s public discovery unavailable: %s", p.config.name, strings.Join(errors, "; "))
+	// No indexed candidates is normal. Only surface an error if both free indexes failed to execute.
+	if len(errs) >= 2 {
+		return nil, fmt.Errorf("%s public discovery unavailable: %s", p.config.name, strings.Join(errs, "; "))
 	}
 	return []model.Video{}, nil
 }
 
-type indexedSearchItem struct {
-	Title string
-	URL   string
-}
+type indexedSearchItem struct{ Title, URL string }
 
 type publicRSS struct {
 	Channel struct {
@@ -193,10 +135,10 @@ var (
 
 func publicSemaphore() chan struct{} {
 	publicIndexOnce.Do(func() {
-		concurrency := 4
+		concurrency := 6
 		if raw := strings.TrimSpace(os.Getenv("PUBLIC_INDEX_CONCURRENCY")); raw != "" {
-			if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 && parsed <= 16 {
-				concurrency = parsed
+			if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 16 {
+				concurrency = n
 			}
 		}
 		publicIndexSem = make(chan struct{}, concurrency)
@@ -205,12 +147,8 @@ func publicSemaphore() chan struct{} {
 }
 
 func publicIndexBing(ctx context.Context, query string, limit int) ([]indexedSearchItem, error) {
-	values := url.Values{}
-	values.Set("format", "rss")
-	values.Set("count", strconv.Itoa(limit))
-	values.Set("q", query)
-	endpoint := "https://www.bing.com/search?" + values.Encode()
-	data, err := publicGET(ctx, endpoint, "application/rss+xml,application/xml,text/xml;q=0.9,*/*;q=0.5")
+	values := url.Values{"format": {"rss"}, "count": {strconv.Itoa(limit)}, "q": {query}}
+	data, err := publicGET(ctx, "https://www.bing.com/search?"+values.Encode(), "application/rss+xml,application/xml,text/xml;q=0.9,*/*;q=0.5")
 	if err != nil {
 		return nil, err
 	}
@@ -218,43 +156,39 @@ func publicIndexBing(ctx context.Context, query string, limit int) ([]indexedSea
 	if err := xml.Unmarshal(data, &feed); err != nil {
 		return nil, fmt.Errorf("parse RSS: %w", err)
 	}
-	items := make([]indexedSearchItem, 0, len(feed.Channel.Items))
+	out := make([]indexedSearchItem, 0, len(feed.Channel.Items))
 	for _, item := range feed.Channel.Items {
 		title := cleanIndexText(item.Title)
 		if title == "" {
 			title = cleanIndexText(item.Description)
 		}
-		items = append(items, indexedSearchItem{Title: title, URL: strings.TrimSpace(html.UnescapeString(item.Link))})
+		out = append(out, indexedSearchItem{title, strings.TrimSpace(html.UnescapeString(item.Link))})
 	}
-	return items, nil
+	return out, nil
 }
 
 func publicIndexDuckDuckGo(ctx context.Context, query string, limit int) ([]indexedSearchItem, error) {
-	values := url.Values{}
-	values.Set("q", query)
-	endpoint := "https://lite.duckduckgo.com/lite/?" + values.Encode()
-	data, err := publicGET(ctx, endpoint, "text/html,application/xhtml+xml;q=0.9,*/*;q=0.5")
+	values := url.Values{"q": {query}}
+	data, err := publicGET(ctx, "https://lite.duckduckgo.com/lite/?"+values.Encode(), "text/html,application/xhtml+xml;q=0.9,*/*;q=0.5")
 	if err != nil {
 		return nil, err
 	}
 	matches := anchorPattern.FindAllSubmatch(data, -1)
-	items := make([]indexedSearchItem, 0, minInt(limit, len(matches)))
+	out := make([]indexedSearchItem, 0, minInt(limit, len(matches)))
 	for _, match := range matches {
 		if len(match) < 3 {
 			continue
 		}
-		rawURL := html.UnescapeString(string(match[1]))
-		resolved := unwrapDuckDuckGoURL(rawURL)
+		resolved := unwrapDuckDuckGoURL(html.UnescapeString(string(match[1])))
 		if resolved == "" {
 			continue
 		}
-		title := cleanIndexText(string(match[2]))
-		items = append(items, indexedSearchItem{Title: title, URL: resolved})
-		if len(items) >= limit {
+		out = append(out, indexedSearchItem{cleanIndexText(string(match[2])), resolved})
+		if len(out) >= limit {
 			break
 		}
 	}
-	return items, nil
+	return out, nil
 }
 
 func publicGET(ctx context.Context, endpoint, accept string) ([]byte, error) {
@@ -265,19 +199,17 @@ func publicGET(ctx context.Context, endpoint, accept string) ([]byte, error) {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
-
-	timeout := envSeconds("PUBLIC_INDEX_TIMEOUT_SEC", 15)
-	requestCtx, cancel := context.WithTimeout(ctx, timeout)
+	requestCtx, cancel := context.WithTimeout(ctx, envSeconds("PUBLIC_INDEX_TIMEOUT_SEC", 10))
 	defer cancel()
 	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
-	userAgent := strings.TrimSpace(os.Getenv("PUBLIC_INDEX_USER_AGENT"))
-	if userAgent == "" {
-		userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
+	ua := strings.TrimSpace(os.Getenv("PUBLIC_INDEX_USER_AGENT"))
+	if ua == "" {
+		ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
 	}
-	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("User-Agent", ua)
 	req.Header.Set("Accept", accept)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -292,7 +224,7 @@ func publicGET(ctx context.Context, endpoint, accept string) ([]byte, error) {
 
 func (p *PublicShortProvider) normalize(items []indexedSearchItem, keyword string, limit int) []model.Video {
 	seen := map[string]struct{}{}
-	results := make([]model.Video, 0, minInt(limit, len(items)))
+	out := make([]model.Video, 0, minInt(limit, len(items)))
 	for _, item := range items {
 		canonical := p.canonicalURL(item.URL)
 		if canonical == "" {
@@ -304,28 +236,42 @@ func (p *PublicShortProvider) normalize(items []indexedSearchItem, keyword strin
 		seen[canonical] = struct{}{}
 		title := cleanIndexText(item.Title)
 		if title == "" {
-			title = strings.Title(p.config.name) + " video"
+			title = p.config.name + " video"
 		}
-		results = append(results, model.Video{
+		out = append(out, model.Video{
 			ID:           stablePublicID(canonical),
 			Platform:     p.config.name,
 			Title:        title,
 			URL:          canonical,
 			SearchSource: keyword,
 		})
-		if len(results) >= limit {
+		if len(out) >= limit {
 			break
 		}
 	}
-	return results
+	return out
+}
+
+func appendUniqueVideos(dst, src []model.Video, limit int) []model.Video {
+	seen := make(map[string]struct{}, len(dst))
+	for _, video := range dst {
+		seen[video.URL] = struct{}{}
+	}
+	for _, video := range src {
+		if _, ok := seen[video.URL]; ok {
+			continue
+		}
+		seen[video.URL] = struct{}{}
+		dst = append(dst, video)
+		if len(dst) >= limit {
+			break
+		}
+	}
+	return dst
 }
 
 func (p *PublicShortProvider) canonicalURL(raw string) string {
-	raw = strings.TrimSpace(html.UnescapeString(raw))
-	if raw == "" {
-		return ""
-	}
-	u, err := url.Parse(raw)
+	u, err := url.Parse(strings.TrimSpace(html.UnescapeString(raw)))
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 		return ""
 	}
@@ -342,15 +288,14 @@ func (p *PublicShortProvider) canonicalURL(raw string) string {
 		return ""
 	}
 	u.Fragment = ""
-	// Tracking parameters are not needed for downloading and make deduplication worse.
-	query := u.Query()
-	for key := range query {
+	q := u.Query()
+	for key := range q {
 		lower := strings.ToLower(key)
 		if strings.HasPrefix(lower, "utm_") || lower == "spm" || lower == "from" || lower == "source" {
-			query.Del(key)
+			q.Del(key)
 		}
 	}
-	u.RawQuery = query.Encode()
+	u.RawQuery = q.Encode()
 	return u.String()
 }
 
@@ -363,13 +308,14 @@ func unwrapDuckDuckGoURL(raw string) string {
 		return ""
 	}
 	if strings.Contains(strings.ToLower(u.Hostname()), "duckduckgo.com") {
-		if target := strings.TrimSpace(u.Query().Get("uddg")); target != "" {
-			if decoded, err := url.QueryUnescape(target); err == nil {
-				return decoded
-			}
-			return target
+		target := strings.TrimSpace(u.Query().Get("uddg"))
+		if target == "" {
+			return ""
 		}
-		return ""
+		if decoded, err := url.QueryUnescape(target); err == nil {
+			return decoded
+		}
+		return target
 	}
 	return raw
 }
@@ -377,8 +323,7 @@ func unwrapDuckDuckGoURL(raw string) string {
 func cleanIndexText(value string) string {
 	value = html.UnescapeString(value)
 	value = tagPattern.ReplaceAllString(value, " ")
-	value = strings.Join(strings.Fields(value), " ")
-	return strings.TrimSpace(value)
+	return strings.TrimSpace(strings.Join(strings.Fields(value), " "))
 }
 
 func stablePublicID(value string) string {
