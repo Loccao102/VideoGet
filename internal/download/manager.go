@@ -267,12 +267,17 @@ func (m *Manager) run(id string) {
 			m.fail(id, JobFailed, ctx.Err())
 			return
 		}
-		sourceOutput, err := m.download(ctx, job.Video, jobDir)
+		downloadedOutput, err := m.download(ctx, job.Video, jobDir)
 		<-m.downloadSem
 		if err != nil {
 			m.fail(id, JobFailed, err)
 			return
 		}
+		if strings.TrimSpace(downloadedOutput) == "" {
+			m.fail(id, JobFailed, fmt.Errorf("download completed without a source media path"))
+			return
+		}
+		sourceOutput = downloadedOutput
 
 		m.update(id, func(job *Job) {
 			job.SourceOutput = sourceOutput
@@ -280,6 +285,11 @@ func (m *Manager) run(id string) {
 			job.Error = ""
 			job.UpdatedAt = time.Now().UTC()
 		})
+	}
+
+	if strings.TrimSpace(sourceOutput) == "" {
+		m.fail(id, JobLocalizationFailed, fmt.Errorf("source media path is empty before localization"))
+		return
 	}
 
 	if m.localizer == nil || !m.localizer.Enabled() {
