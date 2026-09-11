@@ -32,6 +32,13 @@ def env_int(name: str, default: int, minimum: int = 0) -> int:
         return max(minimum, default)
 
 
+def env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
 def source_signature(path: Path) -> dict:
     stat = path.stat()
     return {
@@ -116,8 +123,31 @@ def build_model() -> tuple[WhisperModel, dict]:
         "device": device,
         "computeType": compute_type,
         "cpuThreads": cpu_threads,
+        "directDecode": env_bool("WHISPER_DIRECT_DECODE", True),
         "loadSeconds": round(elapsed, 3),
     }
+
+
+def decode_segments(model: WhisperModel, media_path: Path, language: str | None, beam_size: int):
+    raw_segments, info = model.transcribe(
+        str(media_path),
+        language=language,
+        beam_size=beam_size,
+        vad_filter=True,
+        condition_on_previous_text=False,
+    )
+    segments = []
+    for segment in raw_segments:
+        text = segment.text.strip()
+        if not text:
+            continue
+        segments.append({
+            "id": len(segments),
+            "start": float(segment.start),
+            "end": float(segment.end),
+            "text": text,
+        })
+    return segments, info
 
 
 def transcribe(model: WhisperModel, input_path: Path, output_dir: Path, stem: str):
@@ -133,37 +163,40 @@ def transcribe(model: WhisperModel, input_path: Path, output_dir: Path, stem: st
         base.log(f"Whisper cache hit: {len(segments)} segment")
         return segments, language, original_srt, True
 
-    with tempfile.TemporaryDirectory(prefix="videoget-whisper-") as temp:
-        audio_path = Path(temp) / "source.wav"
-        base.log("Đang tách audio...")
-        base.run([
-            "ffmpeg", "-y", "-i", str(input_path), "-vn", "-ac", "1", "-ar", "16000",
-            "-c:a", "pcm_s16le", str(audio_path),
-        ])
-        language = os.getenv("WHISPER_LANGUAGE", "zh").strip() or None
-        beam_size = env_int("WHISPER_BEAM_SIZE", 1, 1)
-        base.log(
-            f"Đang transcribe bằng persistent faster-whisper "
-            f"model={os.getenv('WHISPER_MODEL', 'base')}, language={language or 'auto'}..."
-        )
-        raw_segments, info = model.transcribe(
-            str(audio_path),
-            language=language,
-            beam_size=beam_size,
-            vad_filter=True,
-            condition_on_previous_text=False,
-        )
-        segments = []
-        for segment in raw_segments:
-            text = segment.text.strip()
-            if not text:
-                continue
-            segments.append({
-                "id": len(segments),
-                "start": float(segment.start),
-                "end": float(segment.end),
-                "text": text,
-            })
+    language = os.getenv("WHISPER_LANGUAGE", "zh").strip() or None
+    beam_size = env_int("WHISPER_BEAM_SIZE", 1, 1)
+    base.log(
+        f"Đang transcribe bằng persistent faster-whisper "
+        f"model={os.getenv('WHISPER_MODEL', 'base')}, language={language or 'auto'}..."
+    )
+
+    segments = []
+    info = None
+    direct_error = None
+    if env_bool("WHISPER_DIRECT_DECODE", True):
+        try:
+            base.log("Whisper fast path: decode trực tiếp media, không tạo WAV tạm...")
+            segments, info = decode_segments(model, input_path, language, beam_size)
+        except Exception as error:
+            direct_error = error
+            base.log(f"Direct decode lỗi, fallback sang WAV 16 kHz: {error}")
+
+    if info is None:
+        with tempfile.TemporaryDirectory(prefix="videoget-whisper-") as temp:
+            audio_path = Path(temp) / "source.wav"
+            base.log("Đang tách audio WAV fallback...")
+            base.run([
+                "ffmpeg", "-y", "-i", str(input_path), "-vn", "-ac", "1", "-ar", "16000",
+                "-c:a", "pcm_s16le", str(audio_path),
+            ])
+            try:
+                segments, info = decode_segments(model, audio_path, language, beam_size)
+            except Exception as error:
+                if direct_error is not None:
+                    raise RuntimeError(
+                        f"Whisper direct decode failed ({direct_error}); WAV fallback failed ({error})"
+                    ) from error
+                raise
 
     if not segments:
         return [], language or "", original_srt, False
@@ -192,7 +225,6 @@ def translate(segments: list[dict], detected_language: str, output_dir: Path, st
         base.log(f"Translation cache hit: {len(translated)} segment")
         return translated, vi_srt, signature, True
 
-    # Work on a copy so transcript cache stays source-only.
     translated = [dict(item) for item in segments]
     fast.translate_segments(translated, detected_language)
     base.write_srt(vi_srt, translated, "vi")
