@@ -5,12 +5,15 @@ Optimizations:
 - disables Qwen3 thinking for subtitle translation;
 - retries and recursively splits failed translation batches;
 - groups subtitle segments before TTS and synthesizes groups concurrently;
+- uses adaptive Edge TTS retry/backoff and splits failed groups into smaller requests;
 - treats no-speech videos as a successful skip;
 - renders one final Vietnamese video with source-caption/logo cleanup and subtle color grading.
 """
 import asyncio
 import json
 import os
+import random
+import re
 import sys
 import time
 from pathlib import Path
@@ -132,8 +135,8 @@ def translate_segments(segments: list[dict], detected_language: str) -> None:
 
 
 def group_segments(segments: list[dict]) -> list[dict]:
-    max_chars = env_int("TTS_GROUP_MAX_CHARS", 220, 40)
-    max_duration = env_float("TTS_GROUP_MAX_DURATION_SEC", 12.0, 2.0)
+    max_chars = env_int("TTS_GROUP_MAX_CHARS", 180, 40)
+    max_duration = env_float("TTS_GROUP_MAX_DURATION_SEC", 10.0, 2.0)
     max_gap = env_float("TTS_GROUP_MAX_GAP_SEC", 1.2, 0.0)
     groups = []
     current = None
@@ -173,31 +176,129 @@ def fit_clip(clip: AudioSegment, target_ms: int) -> AudioSegment:
     return clip[:target_ms] if len(clip) > target_ms + 120 else clip
 
 
+def clean_tts_text(text: str) -> str:
+    text = str(text or "").replace("\u200b", " ").replace("\ufeff", " ")
+    text = "".join(ch if ch >= " " or ch in "\n\t" else " " for ch in text)
+    return " ".join(text.split()).strip()
+
+
+def split_tts_text(text: str, max_chars: int) -> list[str]:
+    text = clean_tts_text(text)
+    if not text:
+        return []
+    if len(text) <= max_chars:
+        return [text]
+
+    sentences = [part.strip() for part in re.split(r"(?<=[.!?。！？;；:：,，])\s*", text) if part.strip()]
+    chunks: list[str] = []
+    current = ""
+    for sentence in sentences or [text]:
+        if len(sentence) > max_chars:
+            words = sentence.split()
+            if len(words) <= 1:
+                pieces = [sentence[i:i + max_chars] for i in range(0, len(sentence), max_chars)]
+            else:
+                pieces = []
+                piece = ""
+                for word in words:
+                    candidate = f"{piece} {word}".strip()
+                    if piece and len(candidate) > max_chars:
+                        pieces.append(piece)
+                        piece = word
+                    else:
+                        piece = candidate
+                if piece:
+                    pieces.append(piece)
+        else:
+            pieces = [sentence]
+
+        for piece in pieces:
+            candidate = f"{current} {piece}".strip()
+            if current and len(candidate) > max_chars:
+                chunks.append(current)
+                current = piece
+            else:
+                current = candidate
+    if current:
+        chunks.append(current)
+    return [chunk for chunk in chunks if chunk]
+
+
+async def synthesize_tts_file(text: str, output: Path, voice: str, rate: str, label: str) -> None:
+    text = clean_tts_text(text)
+    if not text:
+        raise RuntimeError(f"{label}: empty TTS text")
+
+    retries = env_int("TTS_RETRIES", 4, 0)
+    timeout = env_int("TTS_REQUEST_TIMEOUT_SEC", 75, 15)
+    last_error = None
+    for attempt in range(retries + 1):
+        try:
+            output.unlink(missing_ok=True)
+            await asyncio.wait_for(
+                edge_tts.Communicate(text, voice=voice, rate=rate).save(str(output)),
+                timeout=timeout,
+            )
+            if not output.exists() or output.stat().st_size < 256:
+                raise RuntimeError("Edge TTS returned an empty audio file")
+            return
+        except Exception as error:
+            last_error = error
+            output.unlink(missing_ok=True)
+            if attempt < retries:
+                wait = min(12.0, (2**attempt) + random.uniform(0.25, 1.25))
+                base.log(
+                    f"{label} lỗi, retry {attempt + 1}/{retries} sau {wait:.1f}s: {error}"
+                )
+                await asyncio.sleep(wait)
+    raise RuntimeError(f"{label} failed after {retries + 1} attempts: {last_error}")
+
+
 async def synthesize_segments(segments: list[dict], workdir: Path, total_ms: int) -> Path:
     groups = group_segments(segments)
-    concurrency = env_int("TTS_CONCURRENCY", 4, 1)
+    concurrency = env_int("TTS_CONCURRENCY", 2, 1)
     voice = os.getenv("TTS_VOICE", "vi-VN-HoaiMyNeural")
     rate = os.getenv("TTS_RATE", "+8%")
+    fallback_chars = env_int("TTS_FALLBACK_MAX_CHARS", 90, 30)
     semaphore = asyncio.Semaphore(concurrency)
     base.log(f"TTS: {len(segments)} segment -> {len(groups)} nhóm; concurrency={concurrency}")
 
     async def render_one(index: int, group: dict):
         async with semaphore:
+            text = clean_tts_text(group["text"])
             output = workdir / f"tts_group_{index:04}.mp3"
-            retries = env_int("TTS_RETRIES", 2, 0)
-            last_error = None
-            for attempt in range(retries + 1):
-                try:
-                    await edge_tts.Communicate(group["text"], voice=voice, rate=rate).save(str(output))
-                    last_error = None
-                    break
-                except Exception as error:
-                    last_error = error
-                    if attempt < retries:
-                        await asyncio.sleep(min(6, 2**attempt))
-            if last_error:
-                raise RuntimeError(f"TTS group {index + 1} failed: {last_error}")
-            clip = AudioSegment.from_file(output).set_frame_rate(48000).set_channels(1)
+            try:
+                await synthesize_tts_file(text, output, voice, rate, f"TTS group {index + 1}")
+                clip = AudioSegment.from_file(output).set_frame_rate(48000).set_channels(1)
+            except Exception as primary_error:
+                parts = split_tts_text(text, fallback_chars)
+                if len(parts) <= 1:
+                    raise RuntimeError(f"TTS group {index + 1} failed: {primary_error}") from primary_error
+
+                base.log(
+                    f"TTS group {index + 1} vẫn lỗi; chia {len(text)} ký tự thành "
+                    f"{len(parts)} request nhỏ để fallback"
+                )
+                clip = AudioSegment.silent(duration=0, frame_rate=48000).set_channels(1)
+                for part_index, part in enumerate(parts, start=1):
+                    part_output = workdir / f"tts_group_{index:04}_part_{part_index:02}.mp3"
+                    try:
+                        await synthesize_tts_file(
+                            part,
+                            part_output,
+                            voice,
+                            rate,
+                            f"TTS group {index + 1}.{part_index}",
+                        )
+                    except Exception as fallback_error:
+                        raise RuntimeError(
+                            f"TTS group {index + 1} failed after split fallback: {fallback_error}"
+                        ) from fallback_error
+                    part_clip = AudioSegment.from_file(part_output).set_frame_rate(48000).set_channels(1)
+                    if len(clip) > 0:
+                        clip += AudioSegment.silent(duration=60, frame_rate=48000).set_channels(1)
+                    clip += part_clip
+
             start_ms = max(0, int(float(group["start"]) * 1000))
             end_ms = max(start_ms + 150, int(float(group["end"]) * 1000))
             return start_ms, fit_clip(clip, end_ms - start_ms)
@@ -286,7 +387,6 @@ def render_video(input_path: Path, voice_track: Path, vi_srt: Path, output_path:
         mask_index += 1
 
     if cleanup and cleanup_logos:
-        # Normalized x,y,w,h. Defaults cover common top-right/bottom-right platform watermark zones.
         raw_masks = os.getenv(
             "VIDEO_LOGO_MASKS",
             "0.76,0.02,0.22,0.10;0.76,0.86,0.22,0.12",
@@ -327,7 +427,6 @@ def render_video(input_path: Path, voice_track: Path, vi_srt: Path, output_path:
         cmd += ["-filter_complex", ";".join(filters)]
     cmd += ["-map", video_map, "-map", audio_map]
 
-    # Cleanup/color/subtitle filters require re-encoding the video stream.
     if filters:
         cmd += [
             "-c:v", "libx264",
