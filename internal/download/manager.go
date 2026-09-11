@@ -241,14 +241,22 @@ func (m *Manager) run(id string) {
 		return
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(envPositiveInt("JOB_TIMEOUT_MINUTES", 180))*time.Minute)
+	activeState, active := m.registerActiveJob(id, cancel)
+	if !active {
+		cancel()
+		return
+	}
+	defer func() {
+		cancel()
+		m.unregisterActiveJob(id, activeState)
+	}()
+
 	jobDir := filepath.Join(m.downloadDir, id)
 	if err := os.MkdirAll(jobDir, 0o755); err != nil {
 		m.fail(id, JobFailed, fmt.Errorf("create job directory: %w", err))
 		return
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(envPositiveInt("JOB_TIMEOUT_MINUTES", 180))*time.Minute)
-	defer cancel()
 
 	sourceOutput := ""
 	if reusableMedia(job.SourceOutput) {
@@ -274,7 +282,7 @@ func (m *Manager) run(id string) {
 			return
 		}
 		if strings.TrimSpace(downloadedOutput) == "" {
-			m.fail(id, JobFailed, fmt.Errorf("download completed without a source media path"))
+			m.fail(id, JobFailed, fmt.Errorf("download finished without an output path"))
 			return
 		}
 		sourceOutput = downloadedOutput
@@ -285,11 +293,6 @@ func (m *Manager) run(id string) {
 			job.Error = ""
 			job.UpdatedAt = time.Now().UTC()
 		})
-	}
-
-	if strings.TrimSpace(sourceOutput) == "" {
-		m.fail(id, JobLocalizationFailed, fmt.Errorf("source media path is empty before localization"))
-		return
 	}
 
 	if m.localizer == nil || !m.localizer.Enabled() {
