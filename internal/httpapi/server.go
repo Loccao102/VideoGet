@@ -333,6 +333,27 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
+	if strings.EqualFold(strings.TrimSpace(req.Video.MediaType), "image") {
+		writeError(w, http.StatusUnprocessableEntity, "candidate này là bài ảnh, không có video để tải/Việt hóa")
+		return
+	}
+
+	// Public Xiaohongshu discovery can return both image notes and video notes.
+	// Reuse the preview cache when available and otherwise do one bounded probe so
+	// image-only notes never become doomed download jobs.
+	if strings.EqualFold(strings.TrimSpace(req.Video.Platform), "xiaohongshu") && !strings.EqualFold(strings.TrimSpace(req.Video.MediaType), "video") {
+		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		probed, _ := source.EnrichPreview(ctx, req.Video)
+		cancel()
+		if probed.URL != "" {
+			req.Video = probed
+		}
+		if strings.EqualFold(strings.TrimSpace(req.Video.MediaType), "image") {
+			writeError(w, http.StatusUnprocessableEntity, "Xiaohongshu note này là bài ảnh, không có video stream. Hãy chọn candidate có nhãn Video.")
+			return
+		}
+	}
+
 	job, err := s.jobs.Start(req.Video)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
