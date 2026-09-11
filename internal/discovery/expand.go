@@ -27,7 +27,8 @@ func Expand(keyword string) []string {
 		{[]string{"cà phê", "ca phe", "coffee"}, []string{"户外咖啡", "便携咖啡", "手冲咖啡", "咖啡好物"}},
 		{[]string{"camping", "cắm trại", "cam trai", "outdoor"}, []string{"露营好物", "户外好物", "户外装备", "便携好物"}},
 		{[]string{"pet", "thú cưng", "thu cung", "mèo", "meo", "chó", "cho"}, []string{"宠物好物", "养猫好物", "养狗好物", "宠物用品"}},
-		{[]string{"skincare", "chăm sóc cá nhân", "cham soc ca nhan", "personal care"}, []string{"个人护理好物", "洗护好物", "身体护理", "好物测评"}},
+		{[]string{"skincare", "chăm sóc cá nhân", "cham soc ca nhan", "personal care", "mỹ phẩm", "my pham", "makeup"}, []string{"美妆好物", "平价好物", "新品试用", "好物测评"}},
+		{[]string{"công nghệ", "cong nghe", "technology", "tech", "đồ công nghệ", "do cong nghe", "gadget", "điện tử", "dien tu", "số hóa", "so hoa"}, []string{"科技好物", "数码好物", "实用数码产品", "黑科技好物", "数码新品开箱"}},
 		{[]string{"ai agent", "agent ai"}, []string{"AI智能体", "智能体", "人工智能Agent"}},
 		{[]string{"microservice", "micro service", "vi dịch vụ"}, []string{"微服务", "微服务架构", "分布式系统", "服务拆分"}},
 	}
@@ -60,7 +61,7 @@ func Expand(keyword string) []string {
 		unique = append(unique, value)
 	}
 
-	// Keep the original keyword first; sort the generated terms for stable API responses/tests.
+	// Keep the original keyword first; sort generated terms for stable responses/tests.
 	if len(unique) > 2 {
 		sort.Strings(unique[1:])
 	}
