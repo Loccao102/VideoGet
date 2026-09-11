@@ -39,6 +39,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", s.health)
 	mux.HandleFunc("POST /api/search", s.search)
+	mux.HandleFunc("POST /api/preview", s.preview)
 	mux.HandleFunc("POST /api/download", s.download)
 	mux.HandleFunc("GET /api/jobs", s.listJobs)
 	mux.HandleFunc("GET /api/jobs/{id}", s.getJob)
@@ -64,7 +65,11 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 		"providers":    providers,
 		"localization": s.jobs.LocalizationStatus(),
 		"persistence":  s.jobs.PersistenceStatus(),
-		"time":         time.Now().UTC(),
+		"preview": map[string]any{
+			"enabled":     true,
+			"concurrency": envPositiveInt("PREVIEW_CONCURRENCY", 4),
+		},
+		"time": time.Now().UTC(),
 	})
 }
 
@@ -184,8 +189,6 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for sourceName, errors := range sourceErrors {
-		// A source that returned at least one usable candidate is considered healthy enough;
-		// do not spam the UI with one error for every failed expanded keyword.
 		if sourceSuccess[sourceName] > 0 {
 			continue
 		}
@@ -201,6 +204,31 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 		response.Errors = nil
 	}
 	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) preview(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Video model.Video `json:"video"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if strings.TrimSpace(req.Video.URL) == "" || strings.TrimSpace(req.Video.Platform) == "" {
+		writeError(w, http.StatusBadRequest, "platform and video URL are required")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	video, err := source.EnrichPreview(ctx, req.Video)
+	payload := map[string]any{
+		"video":     video,
+		"available": err == nil && strings.TrimSpace(video.Thumbnail) != "",
+	}
+	if err != nil {
+		payload["error"] = err.Error()
+	}
+	writeJSON(w, http.StatusOK, payload)
 }
 
 func (s *Server) expandFreeSources(requested []string) []string {
