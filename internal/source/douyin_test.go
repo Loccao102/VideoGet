@@ -20,7 +20,7 @@ func TestParseGuestRSS(t *testing.T) {
     </item>
     <item>
       <title>not douyin</title>
-      <link>https://example.com/video/12345678</link>
+      <link>https://example.com/watch/12345678</link>
     </item>
   </channel>
 </rss>`
