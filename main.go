@@ -25,6 +25,7 @@ func main() {
 		log.Fatalf("load embedded web UI: %v", err)
 	}
 	providers := []source.Provider{source.NewBilibiliProvider(), source.NewDouyinProvider()}
+	providers = append(providers, source.NewPublicShortProviders()...)
 	jobs, err := download.NewManager(downloadDir)
 	if err != nil {
 		log.Fatalf("initialize job manager: %v", err)
