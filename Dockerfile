@@ -22,7 +22,7 @@ RUN apt-get update \
 RUN pip install --no-cache-dir \
     yt-dlp==2026.8.19 \
     faster-whisper \
-    edge-tts \
+    edge-tts==7.2.8 \
     pydub
 
 COPY --from=douyin-builder /opt/douyin/bin/douyin /usr/local/bin/douyin
@@ -69,9 +69,12 @@ ENV PYTHONUNBUFFERED=1 \
     OLLAMA_KEEP_ALIVE=15m \
     TTS_VOICE=vi-VN-HoaiMyNeural \
     TTS_RATE=+8% \
-    TTS_CONCURRENCY=4 \
-    TTS_GROUP_MAX_CHARS=220 \
-    TTS_GROUP_MAX_DURATION_SEC=12 \
+    TTS_CONCURRENCY=2 \
+    TTS_RETRIES=4 \
+    TTS_REQUEST_TIMEOUT_SEC=75 \
+    TTS_GROUP_MAX_CHARS=180 \
+    TTS_GROUP_MAX_DURATION_SEC=10 \
+    TTS_FALLBACK_MAX_CHARS=90 \
     BURN_SUBTITLES=true \
     VIDEO_CLEANUP=true \
     VIDEO_CLEANUP_SOURCE_SUBTITLES=true \
