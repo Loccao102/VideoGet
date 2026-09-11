@@ -20,9 +20,11 @@ jobs:
         run: |
           go mod tidy
           git diff --exit-code -- go.mod go.sum
+      - run: gofmt -w internal/localize/manager.go internal/download/manager.go
+      - run: git diff --exit-code -- internal/localize/manager.go internal/download/manager.go
       - run: go vet ./...
       - run: go test ./...
       - run: go build ./...
-      - run: python -m py_compile scripts/localize.py scripts/localize_fast.py
+      - run: python -m py_compile scripts/localize.py scripts/localize_fast.py scripts/localize_worker.py
       - name: Validate Dockerfile
         run: docker buildx build --check .
