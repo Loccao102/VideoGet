@@ -40,12 +40,19 @@ func ExpandContext(ctx context.Context, keyword string) ([]string, error) {
 	}
 	model := strings.TrimSpace(os.Getenv("OLLAMA_MODEL"))
 	if model == "" {
-		model = "qwen2.5:3b"
+		model = "qwen3:8b"
 	}
 
-	prompt := "Bạn tạo keyword để tìm video sản phẩm/trend trên Douyin và Bilibili. " +
-		"Từ chủ đề người dùng, hãy sinh 4-6 cụm tìm kiếm tiếng Trung ngắn, tự nhiên, có intent khám phá sản phẩm, review, đồ hay hoặc trend khi phù hợp. " +
-		"Không bịa thương hiệu. Chỉ trả JSON hợp lệ dạng {\"keywords\":[\"...\"]}. Chủ đề: " + keyword
+	year := time.Now().Year()
+	prompt := fmt.Sprintf(
+		"Bạn tạo keyword tiếng Trung để săn short video có khả năng dùng cho affiliate trên Kuaishou, Xiaohongshu, Douyin, Weibo, Xigua, Haokan, Toutiao, Bilibili và các nền tảng video Trung Quốc. "+
+			"Hiện tại là năm %d. Tuyệt đối không tự thêm năm cũ như 2023, 2024, 2025. Nếu chủ đề không cần năm thì không thêm năm. "+
+			"Từ chủ đề người dùng, sinh 4-6 cụm tìm kiếm tiếng Trung ngắn, tự nhiên, ưu tiên intent mua/review/sản phẩm: 好物, 开箱, 测评, 实用, 新品, 爆款, 神器, 黑科技 khi phù hợp. "+
+			"Tránh keyword quá chung kiểu 'thảo luận xu hướng' nếu không giúp tìm sản phẩm. Không bịa thương hiệu. "+
+			"Chỉ trả JSON hợp lệ dạng {\"keywords\":[\"...\"]}. Chủ đề: %s",
+		year,
+		keyword,
+	)
 
 	body, err := json.Marshal(ollamaGenerateRequest{Model: model, Prompt: prompt, Stream: false, Format: "json"})
 	if err != nil {
