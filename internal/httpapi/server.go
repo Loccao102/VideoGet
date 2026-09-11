@@ -7,7 +7,9 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -89,6 +91,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 		}
 		sort.Strings(req.Sources)
 	}
+	req.Sources = s.expandFreeSources(req.Sources)
 
 	keywords := []string{req.Keyword}
 	var expansionErr error
@@ -104,9 +107,10 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type providerResult struct {
-		key    string
-		videos []model.Video
-		err    error
+		source  string
+		keyword string
+		videos  []model.Video
+		err     error
 	}
 
 	uniqueSources := make([]string, 0, len(req.Sources))
@@ -123,15 +127,20 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 		uniqueSources = append(uniqueSources, name)
 	}
 
-	results := make(chan providerResult, len(uniqueSources)*len(keywords))
+	bufferSize := len(uniqueSources) * len(keywords)
+	if bufferSize < 1 {
+		bufferSize = 1
+	}
+	results := make(chan providerResult, bufferSize)
 	var wg sync.WaitGroup
 	for _, name := range uniqueSources {
 		provider, ok := s.providers[name]
 		if !ok {
-			results <- providerResult{key: name, err: fmt.Errorf("unknown source")}
+			results <- providerResult{source: name, err: fmt.Errorf("unknown source")}
 			continue
 		}
-		for _, keyword := range keywords {
+		sourceKeywords := keywordsForSource(name, keywords)
+		for _, keyword := range sourceKeywords {
 			keyword := keyword
 			wg.Add(1)
 			go func(name string, provider source.Provider) {
@@ -139,7 +148,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 				ctx, cancel := context.WithTimeout(r.Context(), 75*time.Second)
 				defer cancel()
 				videos, err := provider.Search(ctx, keyword, perQueryLimit)
-				results <- providerResult{key: name + ":" + keyword, videos: videos, err: err}
+				results <- providerResult{source: name, keyword: keyword, videos: videos, err: err}
 			}(name, provider)
 		}
 	}
@@ -157,12 +166,30 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 	if expansionErr != nil {
 		response.Errors["keyword_expander"] = expansionErr.Error() + "; static fallback was used"
 	}
+
+	sourceSuccess := map[string]int{}
+	sourceErrors := map[string][]string{}
 	for result := range results {
 		if result.err != nil {
-			response.Errors[result.key] = result.err.Error()
+			message := result.err.Error()
+			if result.keyword != "" {
+				message = result.keyword + ": " + message
+			}
+			sourceErrors[result.source] = appendUnique(sourceErrors[result.source], message)
 			continue
 		}
-		response.Results = append(response.Results, result.videos...)
+		if len(result.videos) > 0 {
+			sourceSuccess[result.source] += len(result.videos)
+			response.Results = append(response.Results, result.videos...)
+		}
+	}
+	for sourceName, errors := range sourceErrors {
+		// A source that returned at least one usable candidate is considered healthy enough;
+		// do not spam the UI with one error for every failed expanded keyword.
+		if sourceSuccess[sourceName] > 0 {
+			continue
+		}
+		response.Errors[sourceName] = summarizeErrors(errors)
 	}
 
 	response.Results = ranking.Deduplicate(response.Results)
@@ -174,6 +201,100 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 		response.Errors = nil
 	}
 	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) expandFreeSources(requested []string) []string {
+	if !envBool("AUTO_FREE_SOURCES", true) {
+		return requested
+	}
+	raw := strings.TrimSpace(os.Getenv("FREE_SHORT_SOURCES"))
+	if raw == "" {
+		raw = "kuaishou,xiaohongshu,weibo,xigua,haokan,toutiao,acfun,meipai,weishi"
+	}
+	out := append([]string(nil), requested...)
+	seen := map[string]struct{}{}
+	for _, name := range out {
+		seen[strings.ToLower(strings.TrimSpace(name))] = struct{}{}
+	}
+	for _, candidate := range strings.Split(raw, ",") {
+		name := strings.ToLower(strings.TrimSpace(candidate))
+		if name == "" {
+			continue
+		}
+		if _, ok := s.providers[name]; !ok {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	return out
+}
+
+func keywordsForSource(name string, keywords []string) []string {
+	if !isPublicShortSource(name) {
+		return keywords
+	}
+	limit := envPositiveInt("PUBLIC_SOURCE_KEYWORD_LIMIT", 3)
+	if limit > len(keywords) {
+		limit = len(keywords)
+	}
+	return keywords[:limit]
+}
+
+func isPublicShortSource(name string) bool {
+	switch name {
+	case "kuaishou", "xiaohongshu", "weibo", "xigua", "haokan", "toutiao", "acfun", "meipai", "weishi":
+		return true
+	default:
+		return false
+	}
+}
+
+func appendUnique(values []string, value string) []string {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
+}
+
+func summarizeErrors(errors []string) string {
+	if len(errors) == 0 {
+		return "source unavailable"
+	}
+	max := 2
+	if len(errors) < max {
+		max = len(errors)
+	}
+	message := strings.Join(errors[:max], " | ")
+	if len(errors) > max {
+		message += fmt.Sprintf(" | +%d lỗi tương tự", len(errors)-max)
+	}
+	return message
+}
+
+func envBool(name string, fallback bool) bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv(name)))
+	if value == "" {
+		return fallback
+	}
+	return value != "0" && value != "false" && value != "no" && value != "off"
+}
+
+func envPositiveInt(name string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
 }
 
 func (s *Server) download(w http.ResponseWriter, r *http.Request) {
