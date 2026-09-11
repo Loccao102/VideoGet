@@ -40,6 +40,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/download", s.download)
 	mux.HandleFunc("GET /api/jobs", s.listJobs)
 	mux.HandleFunc("GET /api/jobs/{id}", s.getJob)
+	mux.HandleFunc("DELETE /api/jobs/{id}", s.deleteJob)
 	mux.HandleFunc("POST /api/jobs/{id}/retry", s.retryJob)
 	if s.web != nil {
 		mux.Handle("/", http.FileServer(http.FS(s.web)))
@@ -202,6 +203,18 @@ func (s *Server) retryJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, job)
+}
+
+func (s *Server) deleteJob(w http.ResponseWriter, r *http.Request) {
+	if err := s.jobs.Delete(r.PathValue("id")); err != nil {
+		status := http.StatusInternalServerError
+		if strings.Contains(err.Error(), "not found") {
+			status = http.StatusNotFound
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) getJob(w http.ResponseWriter, r *http.Request) {
