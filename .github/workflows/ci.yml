@@ -23,6 +23,14 @@ jobs:
       - run: go vet ./...
       - run: go test ./...
       - run: go build ./...
-      - run: python -m py_compile scripts/localize.py scripts/localize_fast.py scripts/localize_worker.py
+      - run: >-
+          python -m py_compile
+          scripts/localize.py
+          scripts/localize_fast.py
+          scripts/localize_worker.py
+          scripts/analyze_layout.py
+          scripts/smart_render.py
+          scripts/localize_smart.py
+          scripts/localize_worker_smart.py
       - name: Validate Dockerfile
         run: docker buildx build --check .
