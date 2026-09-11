@@ -10,16 +10,20 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/videoget .
 
 FROM python:3.12-slim-bookworm
-RUN apt-get update \
+# Docker Desktop/WSL can occasionally route Debian CDN IPv6 very slowly. Keep apt on IPv4,
+# fail/retry stalled transfers, and persist apt indexes/packages in BuildKit caches between rebuilds.
+RUN printf 'Acquire::ForceIPv4 "true";\nAcquire::Retries "5";\nAcquire::http::Timeout "20";\nAcquire::https::Timeout "20";\n' \
+        > /etc/apt/apt.conf.d/99videoget-network
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
         ffmpeg \
         fonts-noto-core \
         fonts-noto-cjk \
-        fonts-noto-color-emoji \
-        nodejs \
-    && rm -rf /var/lib/apt/lists/*
+        fonts-noto-color-emoji
 
 RUN pip install --no-cache-dir \
     yt-dlp==2026.8.19 \
