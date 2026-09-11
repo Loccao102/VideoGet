@@ -42,6 +42,7 @@ func (m *Manager) ytdlpPublic(ctx context.Context, platform, rawURL, outputDir s
 			"--no-continue",
 			"--retries", "3",
 			"--fragment-retries", "3",
+			"--retry-sleep", "2",
 			"--socket-timeout", "25",
 			"--concurrent-fragments", "1",
 			"--merge-output-format", "mp4",
@@ -71,6 +72,11 @@ func (m *Manager) ytdlpPublic(ctx context.Context, platform, rawURL, outputDir s
 			message := strings.TrimSpace(stderr.String())
 			if message == "" {
 				message = err.Error()
+			}
+			// Changing the requested format cannot turn an image-only post into a video.
+			// Stop immediately so one bad Xiaohongshu candidate does not waste two long attempts.
+			if strings.EqualFold(platform, "xiaohongshu") && strings.Contains(strings.ToLower(message), "no video formats found") {
+				return "", fmt.Errorf("Xiaohongshu note không có video format công khai (thường là bài ảnh hoặc note cần xsec/session). Hãy chọn candidate được preview xác nhận là Video")
 			}
 			errors = append(errors, fmt.Sprintf("attempt %d: %s", attempt+1, message))
 		}
