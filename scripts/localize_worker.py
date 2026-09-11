@@ -13,6 +13,7 @@ import asyncio
 import json
 import math
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -39,14 +40,24 @@ def env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() not in {"0", "false", "no", "off"}
 
 
+def clean_video_title(stem: str) -> str:
+    title = str(stem or "").strip()
+    title = re.sub(r"\s*\[(?:BV[0-9A-Za-z]+|av\d+|\d{8,})\]\s*$", "", title, flags=re.IGNORECASE)
+    title = title.replace("_", " ").strip()
+    return title[:240]
+
+
 def source_signature(path: Path) -> dict:
     stat = path.stat()
     return {
+        "version": 2,
         "size": stat.st_size,
         "mtimeNs": stat.st_mtime_ns,
-        "whisperModel": os.getenv("WHISPER_MODEL", "base"),
+        "whisperModel": os.getenv("WHISPER_MODEL", "small"),
         "whisperLanguage": os.getenv("WHISPER_LANGUAGE", "zh").strip(),
         "whisperBeamSize": env_int("WHISPER_BEAM_SIZE", 1, 1),
+        "conditionPreviousText": env_bool("WHISPER_CONDITION_PREVIOUS_TEXT", True),
+        "titlePrompt": env_bool("WHISPER_USE_TITLE_PROMPT", True),
     }
 
 
@@ -58,22 +69,27 @@ def translation_signature(transcript_signature: dict) -> dict:
         else os.getenv("OPENAI_COMPAT_MODEL", "")
     )
     return {
-        "version": 1,
+        "version": 2,
+        "promptVersion": fast.TRANSLATION_PROMPT_VERSION,
         "transcript": transcript_signature,
         "provider": provider,
         "model": model,
+        "style": os.getenv("TRANSLATE_STYLE", "natural_social"),
+        "contextSegments": env_int("TRANSLATE_CONTEXT_SEGMENTS", 3, 0),
+        "batchSize": env_int("TRANSLATE_BATCH_SIZE", 10, 1),
+        "temperature": os.getenv("TRANSLATE_TEMPERATURE", "0.15"),
     }
 
 
 def tts_signature(translation_sig: dict) -> dict:
     return {
-        "version": 1,
+        "version": 2,
         "translation": translation_sig,
         "voice": os.getenv("TTS_VOICE", "vi-VN-HoaiMyNeural"),
         "rate": os.getenv("TTS_RATE", "+8%"),
         "maxSpeed": os.getenv("TTS_MAX_SPEED", "2.0"),
-        "groupChars": os.getenv("TTS_GROUP_MAX_CHARS", "220"),
-        "groupDuration": os.getenv("TTS_GROUP_MAX_DURATION_SEC", "12"),
+        "groupChars": os.getenv("TTS_GROUP_MAX_CHARS", "180"),
+        "groupDuration": os.getenv("TTS_GROUP_MAX_DURATION_SEC", "10"),
         "groupGap": os.getenv("TTS_GROUP_MAX_GAP_SEC", "1.2"),
     }
 
@@ -96,7 +112,7 @@ def write_cache(path: Path, signature: dict, **payload) -> None:
 
 
 def build_model() -> tuple[WhisperModel, dict]:
-    model_name = os.getenv("WHISPER_MODEL", "base")
+    model_name = os.getenv("WHISPER_MODEL", "small")
     device = os.getenv("WHISPER_DEVICE", "cpu")
     compute_type = os.getenv(
         "WHISPER_COMPUTE_TYPE", "int8" if device == "cpu" else "float16"
@@ -124,18 +140,28 @@ def build_model() -> tuple[WhisperModel, dict]:
         "computeType": compute_type,
         "cpuThreads": cpu_threads,
         "directDecode": env_bool("WHISPER_DIRECT_DECODE", True),
+        "conditionPreviousText": env_bool("WHISPER_CONDITION_PREVIOUS_TEXT", True),
+        "titlePrompt": env_bool("WHISPER_USE_TITLE_PROMPT", True),
         "loadSeconds": round(elapsed, 3),
     }
 
 
-def decode_segments(model: WhisperModel, media_path: Path, language: str | None, beam_size: int):
-    raw_segments, info = model.transcribe(
-        str(media_path),
-        language=language,
-        beam_size=beam_size,
-        vad_filter=True,
-        condition_on_previous_text=False,
-    )
+def decode_segments(
+    model: WhisperModel,
+    media_path: Path,
+    language: str | None,
+    beam_size: int,
+    initial_prompt: str = "",
+):
+    kwargs = {
+        "language": language,
+        "beam_size": beam_size,
+        "vad_filter": True,
+        "condition_on_previous_text": env_bool("WHISPER_CONDITION_PREVIOUS_TEXT", True),
+    }
+    if initial_prompt:
+        kwargs["initial_prompt"] = initial_prompt
+    raw_segments, info = model.transcribe(str(media_path), **kwargs)
     segments = []
     for segment in raw_segments:
         text = segment.text.strip()
@@ -165,10 +191,14 @@ def transcribe(model: WhisperModel, input_path: Path, output_dir: Path, stem: st
 
     language = os.getenv("WHISPER_LANGUAGE", "zh").strip() or None
     beam_size = env_int("WHISPER_BEAM_SIZE", 1, 1)
+    title_prompt = clean_video_title(stem) if env_bool("WHISPER_USE_TITLE_PROMPT", True) else ""
     base.log(
         f"Đang transcribe bằng persistent faster-whisper "
-        f"model={os.getenv('WHISPER_MODEL', 'base')}, language={language or 'auto'}..."
+        f"model={os.getenv('WHISPER_MODEL', 'small')}, language={language or 'auto'}, "
+        f"context={'on' if env_bool('WHISPER_CONDITION_PREVIOUS_TEXT', True) else 'off'}..."
     )
+    if title_prompt:
+        base.log(f"Whisper title context: {title_prompt}")
 
     segments = []
     info = None
@@ -176,7 +206,7 @@ def transcribe(model: WhisperModel, input_path: Path, output_dir: Path, stem: st
     if env_bool("WHISPER_DIRECT_DECODE", True):
         try:
             base.log("Whisper fast path: decode trực tiếp media, không tạo WAV tạm...")
-            segments, info = decode_segments(model, input_path, language, beam_size)
+            segments, info = decode_segments(model, input_path, language, beam_size, title_prompt)
         except Exception as error:
             direct_error = error
             base.log(f"Direct decode lỗi, fallback sang WAV 16 kHz: {error}")
@@ -190,7 +220,7 @@ def transcribe(model: WhisperModel, input_path: Path, output_dir: Path, stem: st
                 "-c:a", "pcm_s16le", str(audio_path),
             ])
             try:
-                segments, info = decode_segments(model, audio_path, language, beam_size)
+                segments, info = decode_segments(model, audio_path, language, beam_size, title_prompt)
             except Exception as error:
                 if direct_error is not None:
                     raise RuntimeError(
@@ -226,7 +256,12 @@ def translate(segments: list[dict], detected_language: str, output_dir: Path, st
         return translated, vi_srt, signature, True
 
     translated = [dict(item) for item in segments]
+    video_title = clean_video_title(stem)
+    for item in translated:
+        item["_videoTitle"] = video_title
     fast.translate_segments(translated, detected_language)
+    for item in translated:
+        item.pop("_videoTitle", None)
     base.write_srt(vi_srt, translated, "vi")
     write_cache(cache_path, signature, segments=translated)
     return translated, vi_srt, signature, False
