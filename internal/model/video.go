@@ -6,6 +6,7 @@ type VideoScores struct {
 	Engagement float64 `json:"engagement"`
 	Recency    float64 `json:"recency"`
 	Relevance  float64 `json:"relevance"`
+	Affiliate  float64 `json:"affiliate"`
 	Trend      float64 `json:"trend"`
 	Overall    float64 `json:"overall"`
 }
