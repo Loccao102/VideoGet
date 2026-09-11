@@ -33,7 +33,8 @@ COPY scripts /app/scripts
 WORKDIR /app
 RUN mkdir -p /app/downloads /root/.cache
 
-ENV ADDR=:8080 \
+ENV PYTHONUNBUFFERED=1 \
+    ADDR=:8080 \
     DOWNLOAD_DIR=/app/downloads \
     JOB_DB_PATH=/app/downloads/videoget.db \
     DOWNLOAD_CONCURRENCY=3 \
@@ -46,11 +47,18 @@ ENV ADDR=:8080 \
     AUTO_LOCALIZE=true \
     LOCALIZE_SCRIPT=/app/scripts/localize_fast.py \
     LOCALIZE_CONCURRENCY=1 \
+    LOCALIZE_PERSISTENT_WORKER=true \
+    LOCALIZE_WORKER_SCRIPT=/app/scripts/localize_worker.py \
+    LOCALIZE_WORKER_FALLBACK=true \
+    LOCALIZE_WORKER_PREWARM=true \
+    LOCALIZE_WORKER_START_TIMEOUT_SEC=600 \
     WHISPER_MODEL=base \
     WHISPER_DEVICE=cpu \
     WHISPER_COMPUTE_TYPE=int8 \
     WHISPER_LANGUAGE=zh \
     WHISPER_BEAM_SIZE=1 \
+    WHISPER_CPU_THREADS=8 \
+    WHISPER_NUM_WORKERS=1 \
     TRANSLATE_PROVIDER=ollama \
     TRANSLATE_BATCH_SIZE=12 \
     TRANSLATE_TIMEOUT_SEC=180 \
