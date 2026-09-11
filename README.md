@@ -8,7 +8,7 @@ chủ đề tiếng Việt
   -> search Douyin / Bilibili
   -> deduplicate + filter + ranking
   -> queue download
-  -> faster-whisper
+  -> persistent faster-whisper worker
   -> dịch bằng Ollama
   -> Vietnamese TTS
   -> cleanup video
@@ -31,13 +31,46 @@ chủ đề tiếng Việt
 - Bilibili download bằng `yt-dlp`, có nhiều format fallback, retry/backoff và kiểm tra audio bằng `ffprobe`.
 - `DOWNLOAD_CONCURRENCY` giới hạn số download chạy đồng thời.
 
-### Localization
+### Localization tối ưu hiệu năng
 - `faster-whisper` tạo transcript/subtitle gốc.
+- Whisper chạy trong **persistent Python worker**: model được load một lần và giữ trong RAM thay vì load lại cho từng video.
+- Worker có thể prewarm ngay khi VideoGet khởi động để giảm latency của job đầu tiên.
+- `WHISPER_BEAM_SIZE=1`, `int8` và cấu hình CPU threads ưu tiên tốc độ trên máy local.
 - Ollama dịch Trung -> Việt; mặc định `qwen3:8b`, tắt thinking cho tác vụ dịch JSON.
 - Translation retry + tự chia nhỏ batch lỗi.
 - Edge TTS tạo voice Việt; nhiều segment được gộp thành nhóm và synthesize song song.
 - `LOCALIZE_CONCURRENCY=1` mặc định để các Whisper job không tranh CPU/RAM.
 - Video không nhận diện được speech được skip có kiểm soát thay vì làm hỏng toàn bộ queue.
+
+### Stage cache
+Artifact trung gian được cache theo source/config của từng stage:
+
+```text
+localized/
+  *.transcript.json    # transcript + timestamp
+  *.translated.json    # bản dịch Việt
+  *.tts.json           # cấu hình voice đã dùng
+  *.original.srt
+  *.vi.srt
+  *.vi-voice.wav
+  *.vi-dubbed.mp4
+  *.localization.json
+```
+
+Khi retry:
+- source và Whisper config không đổi -> **skip Whisper**;
+- translation provider/model không đổi -> **skip dịch**;
+- voice/rate/grouping không đổi -> **skip TTS**;
+- renderer vẫn có thể chạy lại để áp dụng cleanup/subtitle/color config mới.
+
+Ví dụ một job lỗi ở render có thể retry theo đường:
+
+```text
+transcript cache hit
+ -> translation cache hit
+ -> TTS cache hit
+ -> render lại
+```
 
 ### Final render
 - Giữ file `.srt` để chỉnh sửa/re-render.
@@ -68,7 +101,7 @@ Khi VideoGet khởi động lại:
 - job đang `queued`, `downloading` hoặc `localizing` được đưa trở lại queue;
 - nếu source video đã tải đầy đủ và còn audio, VideoGet tái sử dụng file đó thay vì tải lại;
 - job `failed` / `localization_failed` không tự retry vô hạn; UI có nút **Thử lại**;
-- retry localization sẽ tái sử dụng source video đã tải nếu file còn hợp lệ.
+- retry localization dùng stage cache để tránh chạy lại công việc đã hoàn thành.
 
 ## Chạy bằng Docker
 
@@ -99,6 +132,28 @@ ollama pull qwen3:8b
 curl http://localhost:11434/api/tags
 ```
 
+### Persistent Whisper worker
+
+Mặc định Docker bật:
+
+```env
+LOCALIZE_PERSISTENT_WORKER=true
+LOCALIZE_WORKER_SCRIPT=/app/scripts/localize_worker.py
+LOCALIZE_WORKER_FALLBACK=true
+LOCALIZE_WORKER_PREWARM=true
+LOCALIZE_WORKER_START_TIMEOUT_SEC=600
+
+WHISPER_MODEL=base
+WHISPER_DEVICE=cpu
+WHISPER_COMPUTE_TYPE=int8
+WHISPER_LANGUAGE=zh
+WHISPER_BEAM_SIZE=1
+WHISPER_CPU_THREADS=8
+WHISPER_NUM_WORKERS=1
+```
+
+Nếu worker gặp lỗi hạ tầng, `LOCALIZE_WORKER_FALLBACK=true` cho phép VideoGet quay về `localize_fast.py` one-shot. Lỗi nội dung của chính job không bị chạy lại vô ích bằng fallback.
+
 ### Cookies
 
 ```env
@@ -126,7 +181,7 @@ Health:
 GET /api/health
 ```
 
-Response có trạng thái source provider, localization và SQLite persistence.
+`localization` trong health trả thêm trạng thái `persistentWorker`, `workerRunning`, số request, số lần start và thông tin model/device đang được giữ trong RAM.
 
 ## Search API
 
@@ -200,6 +255,26 @@ Retry job lỗi:
 POST /api/jobs/{id}/retry
 ```
 
+Job hoàn tất có thể trả thêm số liệu:
+
+```json
+{
+  "localization": {
+    "worker": true,
+    "cacheHits": ["transcript", "translation", "tts"],
+    "timings": {
+      "transcribe": 0.01,
+      "translate": 0.01,
+      "tts": 0.01,
+      "render": 7.42,
+      "total": 7.48
+    }
+  }
+}
+```
+
+UI hiển thị các timing này để xác định bottleneck thực tế trên máy đang chạy.
+
 ## Output
 
 ```text
@@ -208,6 +283,9 @@ downloads/
   <job-id>/
     original-video.mp4
     localized/
+      original-video.transcript.json
+      original-video.translated.json
+      original-video.tts.json
       original-video.original.srt
       original-video.vi.srt
       original-video.vi-voice.wav
@@ -215,7 +293,7 @@ downloads/
       original-video.localization.json
 ```
 
-`*.vi-dubbed.mp4` là file final đã render. Các artifact trung gian được giữ để sau này có thể re-render mà không cần làm lại mọi bước.
+`*.vi-dubbed.mp4` là file final đã render.
 
 ## Environment chính
 
@@ -229,9 +307,12 @@ downloads/
 | `KEYWORD_EXPANDER` | `ollama` | keyword expansion |
 | `AUTO_LOCALIZE` | `true` | tự Việt hóa sau download |
 | `LOCALIZE_CONCURRENCY` | `1` | số localization chạy đồng thời |
+| `LOCALIZE_PERSISTENT_WORKER` | `true` | giữ Whisper model trong RAM |
+| `LOCALIZE_WORKER_PREWARM` | `true` | warm model lúc app start |
 | `WHISPER_MODEL` | `base` | faster-whisper model |
 | `WHISPER_LANGUAGE` | `zh` | ngôn ngữ nguồn ưu tiên |
 | `WHISPER_BEAM_SIZE` | `1` | decode nhanh trên CPU |
+| `WHISPER_CPU_THREADS` | `8` | CPU threads cho CTranslate2 |
 | `OLLAMA_BASE_URL` | `http://host.docker.internal:11434` | Ollama local từ Docker |
 | `OLLAMA_MODEL` | `qwen3:8b` | local LLM |
 | `TTS_VOICE` | `vi-VN-HoaiMyNeural` | voice Việt |
@@ -264,18 +345,23 @@ Go API
          +-- SQLite (WAL)
          +-- download semaphore
          +-- resume / retry
-         +-- faster-whisper
-         +-- Ollama translation
-         +-- edge-tts
-         +-- FFmpeg final render
+         |
+         +-- Persistent Python Worker
+               +-- faster-whisper loaded once
+               +-- transcript cache
+               +-- translation cache
+               +-- TTS cache
+               +-- Ollama translation
+               +-- edge-tts
+               +-- FFmpeg final render
 ```
 
 ## Ưu tiên tiếp theo
 
-1. **Persistent Whisper worker**: giữ Whisper model trong RAM thay vì load model lại cho từng localization process.
-2. **Stage cache / re-render**: đổi voice, subtitle style hoặc cleanup config mà không transcribe/dịch lại.
+1. **Re-render API/UI**: đổi subtitle style, voice, cleanup và color grade trực tiếp từ UI mà không chạy lại stage không cần thiết.
+2. **Media Library**: preview original/final, transcript, subtitle, timing và re-render.
 3. **Affiliate Analyzer**: cluster nhiều video thành sản phẩm/ngách, phân tích pain point, hook, selling point và độ phù hợp affiliate Việt Nam.
-4. **Media Library**: preview original/final, transcript, subtitle, analysis và re-render từ UI.
+4. **Render acceleration**: tùy phần cứng có thể thêm NVENC/Quick Sync profile thay cho `libx264` CPU.
 5. Advanced OCR/inpainting chỉ bật khi cần xử lý text nguồn nằm rải rác trong frame.
 
 ## Third-party & sử dụng nội dung
