@@ -58,12 +58,19 @@ const S={results:[],selected:new Set(),keywords:[]};
 const $=id=>document.getElementById(id);
 const statusLabel={queued:'Đang chờ',downloading:'Đang tải',localizing:'Đang tạo sub + voice Việt',done:'Hoàn tất',failed:'Tải thất bại',localization_failed:'Tải xong nhưng Việt hóa lỗi'};
 const fmt=n=>n?Intl.NumberFormat('vi',{notation:n>=10000?'compact':'standard',maximumFractionDigits:1}).format(n):'0';
+const sec=n=>Number.isFinite(+n)?`${(+n).toFixed(1)}s`:'-';
 
 async function health(){
   try{
     const d=await fetch('/api/health').then(r=>r.json());
     const parts=Object.entries(d.providers||{}).map(([k,v])=>`${k}: ${v.available?'ready':'unavailable'}`);
-    if(d.localization)parts.push(`Việt hóa: ${d.localization.enabled?(d.localization.available?'ready':'unavailable'):'off'}`);
+    if(d.localization){
+      parts.push(`Việt hóa: ${d.localization.enabled?(d.localization.available?'ready':'unavailable'):'off'}`);
+      if(d.localization.persistentWorker){
+        const wi=d.localization.workerInfo||{};
+        parts.push(`Whisper worker: ${d.localization.workerRunning?'warm':'warming'}${wi.model?` · ${wi.model}/${wi.device||'?'}`:''}`);
+      }
+    }
     if(d.persistence)parts.push(`SQLite: ${d.persistence.enabled?'ready':'off'} · ${d.persistence.jobs||0} jobs`);
     $('health').textContent=parts.join(' · ');
   }catch{}
@@ -138,8 +145,18 @@ async function jobs(){
       const d=document.createElement('div');d.className='job';
       const s=document.createElement('div');s.className='status '+(j.status==='done'?'ok':j.status.includes('failed')?'bad':'warn');s.textContent=`${statusLabel[j.status]||j.status} · ${j.video?.title||j.video?.id||''}`;d.append(s);
       const attempt=document.createElement('small');attempt.textContent=`Job ${j.id} · lần chạy ${j.attempts||1}`;d.append(attempt);
-      if(j.localization){const info=document.createElement('small');info.textContent=`${j.localization.segments||0} đoạn · nguồn: ${j.localization.detectedLanguage||'?'} · output: ${j.output||''}`;d.append(info)}
-      else if(j.output){const info=document.createElement('small');info.textContent=`Output: ${j.output}`;d.append(info)}
+      if(j.localization){
+        const info=document.createElement('small');info.textContent=`${j.localization.segments||0} đoạn · nguồn: ${j.localization.detectedLanguage||'?'} · ${j.localization.worker?'persistent worker':'one-shot'} · output: ${j.output||''}`;d.append(info);
+        if(j.localization.timings){
+          const t=j.localization.timings;
+          const perf=document.createElement('small');
+          perf.textContent=`Hiệu năng: Whisper ${sec(t.transcribe)} · Dịch ${sec(t.translate)} · TTS ${sec(t.tts)} · Render ${sec(t.render)} · Tổng ${sec(t.total)}`;
+          d.append(perf);
+        }
+        if(j.localization.cacheHits?.length){
+          const cache=document.createElement('small');cache.className='ok';cache.textContent=`Cache hit: ${j.localization.cacheHits.join(', ')}`;d.append(cache);
+        }
+      } else if(j.output){const info=document.createElement('small');info.textContent=`Output: ${j.output}`;d.append(info)}
       if(j.error){const er=document.createElement('small');er.className='bad';er.textContent=j.error;d.append(er)}
       if(j.status==='failed'||j.status==='localization_failed'){
         const actions=document.createElement('div');actions.className='job-actions';
@@ -149,7 +166,7 @@ async function jobs(){
     }
   }catch{}
 }
-$('refresh').onclick=jobs;health();jobs();setInterval(jobs,5000);
+$('refresh').onclick=jobs;health();jobs();setInterval(()=>{jobs();health()},5000);
 </script>
 </body>
 </html>
