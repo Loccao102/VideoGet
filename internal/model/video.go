@@ -18,6 +18,9 @@ type Video struct {
 	Author       string       `json:"author,omitempty"`
 	URL          string       `json:"url"`
 	Thumbnail    string       `json:"thumbnail,omitempty"`
+	// MediaType is "video", "image", or empty/"unknown" when public discovery
+	// has not verified the underlying post yet.
+	MediaType    string       `json:"mediaType,omitempty"`
 	DurationSec  int64        `json:"durationSec,omitempty"`
 	Views        int64        `json:"views,omitempty"`
 	Likes        int64        `json:"likes,omitempty"`
