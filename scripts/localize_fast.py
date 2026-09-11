@@ -2,6 +2,8 @@
 """Fast localization pipeline for VideoGet.
 
 Optimizations:
+- translates with nearby subtitle context instead of isolated machine-translation batches;
+- asks the LLM to localize into natural Vietnamese spoken language rather than word-for-word output;
 - disables Qwen3 thinking for subtitle translation;
 - retries and recursively splits failed translation batches;
 - groups subtitle segments before TTS and synthesizes groups concurrently;
@@ -23,6 +25,9 @@ from pydub import AudioSegment
 from pydub.effects import speedup
 
 import localize as base
+
+
+TRANSLATION_PROMPT_VERSION = 2
 
 
 def env_int(name: str, default: int, minimum: int = 0) -> int:
@@ -53,17 +58,66 @@ def ollama_base() -> str:
     return url
 
 
+def translation_prompt(batch: list[dict], detected_language: str) -> str:
+    context = batch[0].get("_context", {}) if batch else {}
+    targets = [{"id": item["id"], "text": item["text"]} for item in batch]
+    style = os.getenv("TRANSLATE_STYLE", "natural_social").strip().lower()
+    title = str(context.get("videoTitle", "")).strip()
+    before = context.get("before") or []
+    after = context.get("after") or []
+
+    style_hint = (
+        "Giọng tự nhiên như lời thoại video ngắn/TikTok Việt Nam: gọn, dễ nghe, đời thường, không văn dịch."
+        if style in {"natural_social", "social", "natural"}
+        else "Tiếng Việt tự nhiên, rõ nghĩa và phù hợp phụ đề nói."
+    )
+
+    context_payload = {
+        "videoTitle": title,
+        "before": before,
+        "after": after,
+    }
+
+    return (
+        "Bạn là biên tập viên phụ đề Trung -> Việt, không phải máy dịch từng chữ.\n"
+        "Mục tiêu là người Việt nghe một lần phải hiểu ngay người trong video đang nói gì.\n\n"
+        "QUY TẮC BẮT BUỘC:\n"
+        f"- {style_hint}\n"
+        "- Dịch theo Ý NGHĨA của cả câu và ngữ cảnh trước/sau; tiếng Trung thường lược chủ ngữ thì hãy khôi phục tự nhiên khi cần.\n"
+        "- Với tiếng lóng, khẩu ngữ, beauty, mỹ phẩm, đồ gia dụng, review sản phẩm, thương mại điện tử: dùng cách gọi phổ biến ở Việt Nam, tránh Hán-Việt cứng và câu nghe như Google Translate.\n"
+        "- Giữ đúng tên thương hiệu, tên người, model sản phẩm và thuật ngữ đã quen dùng.\n"
+        "- Không tự thêm công dụng, claim quảng cáo, giá, số liệu hoặc thông tin nguồn không nói.\n"
+        "- Nếu ASR có vẻ nghe sai hoặc câu nguồn bị cụt, dùng ngữ cảnh để chọn cách hiểu hợp lý nhất; nếu vẫn không chắc thì dịch bảo thủ, KHÔNG bịa.\n"
+        "- Mỗi id phải là một câu/ý tiếng Việt ngắn, phù hợp thời lượng phụ đề. Có thể đổi trật tự từ và cách diễn đạt để nghe tự nhiên.\n"
+        "- Các câu trong phần context chỉ để hiểu mạch nói. KHÔNG trả translation cho context, chỉ trả các id trong targets.\n"
+        "- Không giải thích, không markdown, không ghi chú.\n\n"
+        f"Ngôn ngữ nguồn: {detected_language or 'unknown'}\n"
+        "NGỮ CẢNH VIDEO:\n"
+        + json.dumps(context_payload, ensure_ascii=False)
+        + "\n\nCÁC ĐOẠN CẦN DỊCH:\n"
+        + json.dumps(targets, ensure_ascii=False)
+        + "\n\nChỉ trả JSON hợp lệ đúng schema: "
+        + '{"translations":[{"id":0,"text":"..."}]}.'
+    )
+
+
 def translate_batch_ollama(batch: list[dict], detected_language: str) -> list[dict]:
     payload = {
         "model": os.getenv("OLLAMA_MODEL", "qwen3:8b"),
         "stream": False,
         "think": False,
+        "format": "json",
         "keep_alive": os.getenv("OLLAMA_KEEP_ALIVE", "15m"),
         "messages": [
-            {"role": "system", "content": "Return strict JSON only. Do not reason aloud."},
-            {"role": "user", "content": base.translation_prompt(batch, detected_language)},
+            {
+                "role": "system",
+                "content": "Bạn là biên tập viên phụ đề tiếng Việt. Return strict JSON only. Do not reason aloud.",
+            },
+            {"role": "user", "content": translation_prompt(batch, detected_language)},
         ],
-        "options": {"temperature": 0},
+        "options": {
+            "temperature": env_float("TRANSLATE_TEMPERATURE", 0.15, 0.0),
+        },
     }
     response = base.http_json(
         ollama_base() + "/api/chat",
@@ -75,10 +129,40 @@ def translate_batch_ollama(batch: list[dict], detected_language: str) -> list[di
     return parsed.get("translations", [])
 
 
+def translate_batch_openai(batch: list[dict], detected_language: str) -> list[dict]:
+    base_url = os.getenv("OPENAI_COMPAT_BASE_URL", "http://host.docker.internal:11434/v1").rstrip("/")
+    model = os.getenv("OPENAI_COMPAT_MODEL", os.getenv("OLLAMA_MODEL", "qwen3:8b"))
+    api_key = os.getenv("OPENAI_COMPAT_API_KEY", "")
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    payload = {
+        "model": model,
+        "temperature": env_float("TRANSLATE_TEMPERATURE", 0.15, 0.0),
+        "messages": [
+            {
+                "role": "system",
+                "content": "Bạn là biên tập viên phụ đề tiếng Việt. Return strict JSON only. Do not reason aloud.",
+            },
+            {"role": "user", "content": translation_prompt(batch, detected_language)},
+        ],
+    }
+    response = base.http_json(
+        base_url + "/chat/completions",
+        payload,
+        headers=headers,
+        timeout=env_int("TRANSLATE_TIMEOUT_SEC", 180, 30),
+    )
+    choices = response.get("choices") or []
+    if not choices:
+        raise RuntimeError("translation endpoint returned no choices")
+    content = choices[0].get("message", {}).get("content", "")
+    parsed = base.extract_json(content)
+    return parsed.get("translations", [])
+
+
 def translate_once(batch: list[dict], language: str, provider: str) -> list[dict]:
     if provider == "ollama":
         return translate_batch_ollama(batch, language)
-    return base.translate_batch_openai(batch, language)
+    return translate_batch_openai(batch, language)
 
 
 def translate_resilient(batch: list[dict], language: str, provider: str) -> list[dict]:
@@ -102,6 +186,13 @@ def translate_resilient(batch: list[dict], language: str, provider: str) -> list
     raise RuntimeError(f"cannot translate segment {batch[0]['id']}: {last_error}")
 
 
+def context_item(item: dict, include_vi: bool = False) -> dict:
+    result = {"id": item.get("id"), "text": str(item.get("text", "")).strip()}
+    if include_vi and str(item.get("vi", "")).strip():
+        result["vi"] = str(item.get("vi", "")).strip()
+    return result
+
+
 def translate_segments(segments: list[dict], detected_language: str) -> None:
     if detected_language.lower().startswith("vi"):
         for segment in segments:
@@ -112,26 +203,47 @@ def translate_segments(segments: list[dict], detected_language: str) -> None:
     if provider not in {"ollama", "openai", "openai_compatible"}:
         raise RuntimeError("TRANSLATE_PROVIDER must be ollama, openai, or openai_compatible")
 
-    batch_size = env_int("TRANSLATE_BATCH_SIZE", 12, 1)
+    batch_size = env_int("TRANSLATE_BATCH_SIZE", 10, 1)
+    context_radius = env_int("TRANSLATE_CONTEXT_SEGMENTS", 3, 0)
+    video_title = ""
+    if segments:
+        video_title = str(segments[0].get("_videoTitle", "")).strip()
+
     for start in range(0, len(segments), batch_size):
         chunk = segments[start:start + batch_size]
-        batch = [{"id": item["id"], "text": item["text"]} for item in chunk]
+        before_start = max(0, start - context_radius)
+        after_end = min(len(segments), start + len(chunk) + context_radius)
+        before = [context_item(item, include_vi=True) for item in segments[before_start:start]]
+        after = [context_item(item) for item in segments[start + len(chunk):after_end]]
+        context = {
+            "videoTitle": video_title,
+            "before": before,
+            "after": after,
+        }
+        batch = [
+            {"id": item["id"], "text": item["text"], "_context": context}
+            for item in chunk
+        ]
         translated = translate_resilient(batch, detected_language, provider)
         lookup = {
             int(item["id"]): str(item.get("text", "")).strip()
             for item in translated
-            if "id" in item
+            if "id" in item and str(item.get("text", "")).strip()
         }
         for item in chunk:
             if item["id"] not in lookup:
                 one = translate_resilient(
-                    [{"id": item["id"], "text": item["text"]}], detected_language, provider
+                    [{"id": item["id"], "text": item["text"], "_context": context}],
+                    detected_language,
+                    provider,
                 )
-                if not one:
+                if not one or not str(one[0].get("text", "")).strip():
                     raise RuntimeError(f"translator omitted segment id {item['id']}")
                 lookup[item["id"]] = str(one[0].get("text", "")).strip()
             item["vi"] = lookup[item["id"]]
-        base.log(f"Đã dịch {min(start + len(chunk), len(segments))}/{len(segments)} segment")
+        base.log(
+            f"Đã dịch theo ngữ cảnh {min(start + len(chunk), len(segments))}/{len(segments)} segment"
+        )
 
 
 def group_segments(segments: list[dict]) -> list[dict]:
