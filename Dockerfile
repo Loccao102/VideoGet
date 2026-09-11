@@ -16,6 +16,8 @@ RUN apt-get update \
         curl \
         ffmpeg \
         fonts-noto-core \
+        fonts-noto-cjk \
+        fonts-noto-color-emoji \
         nodejs \
     && rm -rf /var/lib/apt/lists/*
 
@@ -23,7 +25,8 @@ RUN pip install --no-cache-dir \
     yt-dlp==2026.8.19 \
     faster-whisper \
     edge-tts==7.2.8 \
-    pydub
+    pydub \
+    opencv-python-headless
 
 COPY --from=douyin-builder /opt/douyin/bin/douyin /usr/local/bin/douyin
 COPY --from=go-builder /go/bin/bili /usr/local/bin/bili
@@ -49,10 +52,10 @@ ENV PYTHONUNBUFFERED=1 \
     BILIBILI_RETRIES=2 \
     BILIBILI_DOWNLOAD_ATTEMPTS=3 \
     AUTO_LOCALIZE=true \
-    LOCALIZE_SCRIPT=/app/scripts/localize_fast.py \
+    LOCALIZE_SCRIPT=/app/scripts/localize_smart.py \
     LOCALIZE_CONCURRENCY=1 \
     LOCALIZE_PERSISTENT_WORKER=true \
-    LOCALIZE_WORKER_SCRIPT=/app/scripts/localize_worker.py \
+    LOCALIZE_WORKER_SCRIPT=/app/scripts/localize_worker_smart.py \
     LOCALIZE_WORKER_FALLBACK=true \
     LOCALIZE_WORKER_PREWARM=true \
     LOCALIZE_WORKER_START_TIMEOUT_SEC=600 \
@@ -86,12 +89,15 @@ ENV PYTHONUNBUFFERED=1 \
     TTS_FALLBACK_MAX_CHARS=90 \
     BURN_SUBTITLES=true \
     VIDEO_CLEANUP=true \
+    VIDEO_CLEANUP_MODE=smart \
+    VIDEO_ANALYSIS_SAMPLES=12 \
     VIDEO_CLEANUP_SOURCE_SUBTITLES=true \
     VIDEO_CLEANUP_LOGOS=true \
-    VIDEO_SUBTITLE_MASK_X=0.02 \
-    VIDEO_SUBTITLE_MASK_Y=0.72 \
-    VIDEO_SUBTITLE_MASK_W=0.96 \
-    VIDEO_SUBTITLE_MASK_H=0.24 \
+    VIDEO_SOURCE_SUBTITLE_BLUR=8 \
+    VIDEO_SUBTITLE_FONT=Noto\ Sans \
+    VIDEO_SUBTITLE_BOX_ALPHA=0.58 \
+    VIDEO_SUBTITLE_BOX_PADDING=7 \
+    VIDEO_SUBTITLE_MAX_LINES=2 \
     VIDEO_COLOR_GRADE=true \
     VIDEO_PRESET=veryfast \
     VIDEO_CRF=21 \
