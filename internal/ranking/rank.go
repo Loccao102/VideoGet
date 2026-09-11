@@ -45,12 +45,16 @@ func Rank(videos []model.Video, query, sortBy string, filters model.SearchFilter
 		velocity := normalize(velocityRaw[i], maxVelocity)
 		recency := recencyScore(filtered[i].PublishedAt, now)
 		relevance := relevanceScore(filtered[i], query)
+		affiliate := affiliateScore(filtered[i])
 		trend := clamp01(0.45*engagement + 0.35*recency + 0.20*velocity)
-		overall := clamp01(0.50*trend + 0.30*relevance + 0.20*engagement)
+		// Affiliate discovery intentionally gives commerce intent/source fit enough weight
+		// to keep sparse public-index candidates competitive with high-engagement long-form videos.
+		overall := clamp01(0.32*trend + 0.24*relevance + 0.14*engagement + 0.30*affiliate)
 		filtered[i].Scores = &model.VideoScores{
 			Engagement: round(engagement * 100),
 			Recency:    round(recency * 100),
 			Relevance:  round(relevance * 100),
+			Affiliate:  round(affiliate * 100),
 			Trend:      round(trend * 100),
 			Overall:    round(overall * 100),
 		}
@@ -63,6 +67,8 @@ func Rank(videos []model.Video, query, sortBy string, filters model.SearchFilter
 		sort.SliceStable(filtered, func(i, j int) bool { return filtered[i].Likes > filtered[j].Likes })
 	case "views":
 		sort.SliceStable(filtered, func(i, j int) bool { return filtered[i].Views > filtered[j].Views })
+	case "affiliate":
+		sort.SliceStable(filtered, func(i, j int) bool { return filtered[i].Scores.Affiliate > filtered[j].Scores.Affiliate })
 	default:
 		sort.SliceStable(filtered, func(i, j int) bool { return filtered[i].Scores.Overall > filtered[j].Scores.Overall })
 	}
@@ -128,6 +134,57 @@ func relevanceScore(video model.Video, query string) float64 {
 	}
 	if strings.Contains(strings.ToLower(video.Title), strings.ToLower(strings.TrimSpace(query))) { score = math.Max(score, 1) }
 	return clamp01(score)
+}
+
+func affiliateScore(video model.Video) float64 {
+	platform := strings.ToLower(strings.TrimSpace(video.Platform))
+	sourceFit := map[string]float64{
+		"xiaohongshu": 1.00,
+		"kuaishou":    0.96,
+		"douyin":      0.95,
+		"weishi":      0.86,
+		"meipai":      0.78,
+		"weibo":       0.74,
+		"toutiao":     0.72,
+		"haokan":      0.64,
+		"xigua":       0.60,
+		"bilibili":    0.58,
+		"acfun":       0.46,
+	}[platform]
+	if sourceFit == 0 {
+		sourceFit = 0.5
+	}
+
+	text := strings.ToLower(video.Title + " " + video.SearchSource)
+	intentTerms := []string{
+		"好物", "种草", "开箱", "测评", "评测", "推荐", "实用", "新品", "爆款", "神器", "必买", "平替", "性价比", "清单",
+		"review", "unbox", "đáng mua", "nên mua", "giá tốt", "tiện ích",
+	}
+	matches := 0
+	for _, term := range intentTerms {
+		if strings.Contains(text, term) {
+			matches++
+		}
+	}
+	intent := math.Min(1, 0.25*float64(matches))
+	if matches == 0 {
+		intent = 0.35
+	}
+
+	durationFit := 0.55
+	switch {
+	case video.DurationSec <= 0:
+		durationFit = 0.55
+	case video.DurationSec <= 90:
+		durationFit = 1.0
+	case video.DurationSec <= 180:
+		durationFit = 0.88
+	case video.DurationSec <= 300:
+		durationFit = 0.65
+	default:
+		durationFit = 0.40
+	}
+	return clamp01(0.55*sourceFit + 0.30*intent + 0.15*durationFit)
 }
 
 func tokens(value string) []string {
