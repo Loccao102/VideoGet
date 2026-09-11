@@ -33,6 +33,8 @@ var (
 	previewSem     chan struct{}
 	metaTagPattern = regexp.MustCompile(`(?is)<meta\s+[^>]*>`)
 	metaAttrPattern = regexp.MustCompile(`(?is)([a-zA-Z_:.-]+)\s*=\s*["']([^"']*)["']`)
+	xhsVideoTypePattern = regexp.MustCompile(`(?is)"type"\s*:\s*"video"|"noteType"\s*:\s*"video"|"originVideoKey"\s*:|"media"\s*:\s*\{\s*"stream"`)
+	xhsImageTypePattern = regexp.MustCompile(`(?is)"type"\s*:\s*"normal"|"noteType"\s*:\s*"normal"`)
 )
 
 // EnrichPreview resolves thumbnail and lightweight metadata for a discovered URL without downloading the video.
@@ -76,7 +78,11 @@ func EnrichPreview(ctx context.Context, video model.Video) (model.Video, error) 
 	}
 
 	deep := envPreviewBool("PREVIEW_DEEP_METADATA", false)
-	if strings.TrimSpace(enriched.Thumbnail) == "" || deep {
+	platform := strings.ToLower(strings.TrimSpace(enriched.Platform))
+	// Xiaohongshu public search mixes image notes and video notes. If the cheap page
+	// probe could not identify the type, ask yt-dlp for metadata even when og:image exists.
+	needYTDLP := strings.TrimSpace(enriched.Thumbnail) == "" || deep || (platform == "xiaohongshu" && strings.TrimSpace(enriched.MediaType) == "")
+	if needYTDLP {
 		if metadata, metadataErr := previewYTDLP(ctx, enriched); metadataErr == nil {
 			enriched = metadata
 		} else {
@@ -178,16 +184,25 @@ func previewOpenGraph(ctx context.Context, video model.Video) (model.Video, erro
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
 		return video, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 3<<20))
 	if err != nil {
 		return video, err
 	}
-	meta := parsePreviewMeta(string(body), resp.Request.URL)
+	document := string(body)
+	meta := parsePreviewMeta(document, resp.Request.URL)
 	if title := strings.TrimSpace(meta["title"]); title != "" && !genericPreviewTitle(title) {
 		video.Title = title
 	}
 	if image := strings.TrimSpace(meta["image"]); image != "" {
 		video.Thumbnail = image
+	}
+	if mediaType := strings.TrimSpace(meta["mediaType"]); mediaType != "" {
+		video.MediaType = mediaType
+	}
+	if strings.EqualFold(strings.TrimSpace(video.Platform), "xiaohongshu") {
+		if mediaType := detectXiaohongshuMediaType(document, video.URL); mediaType != "" {
+			video.MediaType = mediaType
+		}
 	}
 	if video.Thumbnail == "" {
 		return video, fmt.Errorf("page contains no preview image")
@@ -220,14 +235,51 @@ func parsePreviewMeta(document string, baseURL *url.URL) map[string]string {
 			if result["title"] == "" {
 				result["title"] = content
 			}
+		case "og:video", "og:video:url", "og:video:secure_url", "twitter:player":
+			if content != "" {
+				result["mediaType"] = "video"
+			}
+		case "og:type":
+			if strings.Contains(strings.ToLower(content), "video") {
+				result["mediaType"] = "video"
+			}
 		}
 	}
 	return result
 }
 
+func detectXiaohongshuMediaType(document, rawURL string) string {
+	// Detail pages carry noteDetailMap keyed by the note id. Limit the heuristic
+	// to the chunk around that id so unrelated recommendation cards do not decide
+	// the type of the selected note.
+	section := document
+	if u, err := url.Parse(rawURL); err == nil {
+		parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+		if len(parts) > 0 {
+			id := parts[len(parts)-1]
+			if len(id) >= 16 {
+				if idx := strings.Index(document, id); idx >= 0 {
+					start := idx - 4096
+					if start < 0 { start = 0 }
+					end := idx + 350000
+					if end > len(document) { end = len(document) }
+					section = document[start:end]
+				}
+			}
+		}
+	}
+	if xhsVideoTypePattern.MatchString(section) {
+		return "video"
+	}
+	if xhsImageTypePattern.MatchString(section) {
+		return "image"
+	}
+	return ""
+}
+
 func genericPreviewTitle(title string) bool {
 	lower := strings.ToLower(strings.TrimSpace(title))
-	for _, marker := range []string{"登录", "login", "首页", "home -", "安全验证", "验证码"} {
+	for _, marker := range []string{"登录", "login", "首页", "home -", "安全验证", "验证码", "你的生活兴趣社区"} {
 		if strings.Contains(lower, marker) {
 			return true
 		}
@@ -247,6 +299,7 @@ type ytPreview struct {
 	CommentCount int64   `json:"comment_count"`
 	Timestamp    int64   `json:"timestamp"`
 	UploadDate   string  `json:"upload_date"`
+	Formats      []json.RawMessage `json:"formats"`
 	Thumbnails   []struct {
 		URL string `json:"url"`
 	} `json:"thumbnails"`
@@ -265,6 +318,7 @@ func previewYTDLP(ctx context.Context, video model.Video) (model.Video, error) {
 		"--skip-download",
 		"--no-playlist",
 		"--no-warnings",
+		"--ignore-no-formats-error",
 		"--socket-timeout", "8",
 		"--retries", "1",
 		"--extractor-retries", "1",
@@ -315,6 +369,9 @@ func previewYTDLP(ctx context.Context, video model.Video) (model.Video, error) {
 	if thumbnail != "" {
 		video.Thumbnail = thumbnail
 	}
+	if len(payload.Formats) > 0 {
+		video.MediaType = "video"
+	}
 	if payload.Duration > 0 {
 		video.DurationSec = int64(payload.Duration + 0.5)
 	}
@@ -347,6 +404,7 @@ func mergePreview(original, enriched model.Video) model.Video {
 	if enriched.Title != "" { original.Title = enriched.Title }
 	if enriched.Author != "" { original.Author = enriched.Author }
 	if enriched.Thumbnail != "" { original.Thumbnail = enriched.Thumbnail }
+	if enriched.MediaType != "" { original.MediaType = enriched.MediaType }
 	if enriched.DurationSec > 0 { original.DurationSec = enriched.DurationSec }
 	if enriched.Views > 0 { original.Views = enriched.Views }
 	if enriched.Likes > 0 { original.Likes = enriched.Likes }
