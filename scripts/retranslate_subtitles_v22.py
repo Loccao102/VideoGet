@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 import retranslate_subtitles as legacy
-import utterance_translate_v23 as translator
+import utterance_translate_v24 as translator
 
 
 def _arg(name: str) -> str:
