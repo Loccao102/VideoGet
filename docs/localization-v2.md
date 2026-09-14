@@ -54,6 +54,46 @@ A manual segment can override auto mode with values such as `+20%`, `+40%`, etc.
 
 The post-speed limit is intentionally conservative. The goal is to ask the voice engine to speak faster naturally first and use waveform speedup only for the remaining small mismatch.
 
+## Translation QA and semantic blocks
+
+The smart persistent worker now emits two additional artifacts after translation and again after a manual subtitle re-render:
+
+```text
+<stem>.translation-qa.json
+<stem>.semantic-blocks.json
+```
+
+Translation QA is deterministic and advisory. It currently checks:
+
+- empty Vietnamese text;
+- suspicious untranslated Chinese remaining in the Vietnamese line;
+- numbers/units present in the source but missing from the translation;
+- Latin brand/model/technical tokens that disappear;
+- reading-speed pressure in characters per second;
+- suspicious duplicate translations on adjacent different source segments.
+
+The report returns `pass`, `warning`, or `error` plus per-segment issue codes. It does **not** automatically overwrite generated or manually corrected text.
+
+Default controls:
+
+```env
+TRANSLATION_QA_WARN_CPS=18
+TRANSLATION_QA_ERROR_CPS=28
+TRANSLATION_QA_MAX_CJK_RATIO=0.18
+```
+
+Semantic blocks are generated from consecutive subtitle/ASR segments using timing gaps, sentence boundaries, duration, and source length. They preserve the original segment IDs so later Translation Memory retrieval can return context without losing subtitle timing.
+
+Default controls:
+
+```env
+SEMANTIC_BLOCK_MAX_DURATION_SEC=12
+SEMANTIC_BLOCK_MAX_SOURCE_CHARS=140
+SEMANTIC_BLOCK_MAX_GAP_SEC=1.0
+```
+
+At this stage semantic blocks are persisted as a safe foundation for retrieval; they are not yet fed back into the translation prompt.
+
 ## Subtitle editor API
 
 ```http
@@ -123,7 +163,7 @@ Manual subtitle corrections are the strongest source for future Translation Memo
 
 ## Next implementation step
 
-After the editing/render loop is stable, wire the semantic layer into translation:
+The next semantic integration should be:
 
 ```text
 Whisper
@@ -131,7 +171,7 @@ Whisper
   -> entity + glossary lookup
   -> pgvector retrieval (same channel > same series > same domain > global)
   -> context-aware translation
-  -> QA
+  -> deterministic QA
   -> subtitle segmentation
 ```
 
