@@ -13,13 +13,17 @@ import (
 )
 
 type SubtitleSegment struct {
-	ID                int     `json:"id"`
-	Start             float64 `json:"start"`
-	End               float64 `json:"end"`
-	SourceText        string  `json:"sourceText,omitempty"`
-	Text              string  `json:"text"`
-	SpeechRate        string  `json:"speechRate,omitempty"`
-	AppliedSpeechRate string  `json:"appliedSpeechRate,omitempty"`
+	ID                    int     `json:"id"`
+	Start                 float64 `json:"start"`
+	End                   float64 `json:"end"`
+	SourceText            string  `json:"sourceText,omitempty"`
+	SourceCorrected       string  `json:"sourceCorrected,omitempty"`
+	Text                  string  `json:"text"`
+	SpeechRate            string  `json:"speechRate,omitempty"`
+	AppliedSpeechRate     string  `json:"appliedSpeechRate,omitempty"`
+	UtteranceID           string  `json:"utteranceId,omitempty"`
+	Speaker               string  `json:"speaker,omitempty"`
+	TranslationConfidence float64 `json:"translationConfidence,omitempty"`
 }
 
 type SubtitleDocument struct {
@@ -36,13 +40,17 @@ type SubtitleUpdate struct {
 }
 
 type pipelineSubtitleSegment struct {
-	ID                int     `json:"id"`
-	Start             float64 `json:"start"`
-	End               float64 `json:"end"`
-	Text              string  `json:"text,omitempty"`
-	VI                string  `json:"vi,omitempty"`
-	SpeechRate        string  `json:"speechRate,omitempty"`
-	AppliedSpeechRate string  `json:"appliedSpeechRate,omitempty"`
+	ID                    int     `json:"id"`
+	Start                 float64 `json:"start"`
+	End                   float64 `json:"end"`
+	Text                  string  `json:"text,omitempty"`
+	SourceCorrected       string  `json:"sourceCorrected,omitempty"`
+	VI                    string  `json:"vi,omitempty"`
+	SpeechRate            string  `json:"speechRate,omitempty"`
+	AppliedSpeechRate     string  `json:"appliedSpeechRate,omitempty"`
+	UtteranceID           string  `json:"utteranceId,omitempty"`
+	Speaker               string  `json:"speaker,omitempty"`
+	TranslationConfidence float64 `json:"translationConfidence,omitempty"`
 }
 
 type subtitleDraft struct {
@@ -126,13 +134,17 @@ func toSubtitleSegments(items []pipelineSubtitleSegment) []SubtitleSegment {
 	out := make([]SubtitleSegment, 0, len(items))
 	for _, item := range items {
 		out = append(out, SubtitleSegment{
-			ID:                item.ID,
-			Start:             item.Start,
-			End:               item.End,
-			SourceText:        item.Text,
-			Text:              item.VI,
-			SpeechRate:        defaultSpeechRate(item.SpeechRate),
-			AppliedSpeechRate: item.AppliedSpeechRate,
+			ID:                    item.ID,
+			Start:                 item.Start,
+			End:                   item.End,
+			SourceText:            item.Text,
+			SourceCorrected:       item.SourceCorrected,
+			Text:                  item.VI,
+			SpeechRate:            defaultSpeechRate(item.SpeechRate),
+			AppliedSpeechRate:     item.AppliedSpeechRate,
+			UtteranceID:           item.UtteranceID,
+			Speaker:               item.Speaker,
+			TranslationConfidence: item.TranslationConfidence,
 		})
 	}
 	return out
@@ -166,9 +178,9 @@ func (m *Manager) SaveSubtitles(id string, update SubtitleUpdate) (SubtitleDocum
 	}
 
 	current, _ := m.GetSubtitles(id)
-	sourceByID := make(map[int]string, len(current.Segments))
+	currentByID := make(map[int]SubtitleSegment, len(current.Segments))
 	for _, item := range current.Segments {
-		sourceByID[item.ID] = item.SourceText
+		currentByID[item.ID] = item
 	}
 
 	seen := map[int]struct{}{}
@@ -200,22 +212,45 @@ func (m *Manager) SaveSubtitles(id string, update SubtitleUpdate) (SubtitleDocum
 		if err != nil {
 			return SubtitleDocument{}, fmt.Errorf("segment %d: %w", item.ID, err)
 		}
+
+		previous := currentByID[item.ID]
 		source := strings.TrimSpace(item.SourceText)
 		if source == "" {
-			source = sourceByID[item.ID]
+			source = previous.SourceText
 		}
+		sourceCorrected := strings.TrimSpace(item.SourceCorrected)
+		if sourceCorrected == "" {
+			sourceCorrected = previous.SourceCorrected
+		}
+		utteranceID := strings.TrimSpace(item.UtteranceID)
+		if utteranceID == "" {
+			utteranceID = previous.UtteranceID
+		}
+		speaker := strings.TrimSpace(item.Speaker)
+		if speaker == "" {
+			speaker = previous.Speaker
+		}
+		confidence := item.TranslationConfidence
+		if confidence <= 0 {
+			confidence = previous.TranslationConfidence
+		}
+
 		pipeline = append(pipeline, pipelineSubtitleSegment{
-			ID:         item.ID,
-			Start:      item.Start,
-			End:        item.End,
-			Text:       source,
-			VI:         text,
-			SpeechRate: rate,
+			ID:                    item.ID,
+			Start:                 item.Start,
+			End:                   item.End,
+			Text:                  source,
+			SourceCorrected:       sourceCorrected,
+			VI:                    text,
+			SpeechRate:            rate,
+			UtteranceID:           utteranceID,
+			Speaker:               speaker,
+			TranslationConfidence: confidence,
 		})
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
-	draft := subtitleDraft{Version: 1, JobID: job.ID, EditedAt: now, Segments: pipeline}
+	draft := subtitleDraft{Version: 2, JobID: job.ID, EditedAt: now, Segments: pipeline}
 	if err := writeJSONAtomic(draftPath, draft); err != nil {
 		return SubtitleDocument{}, err
 	}
@@ -224,7 +259,7 @@ func (m *Manager) SaveSubtitles(id string, update SubtitleUpdate) (SubtitleDocum
 	}
 
 	// Keep the persistent worker's translation cache aligned with manual edits.
-	// This also makes a resumed job preserve the user's text after a restart.
+	// This also preserves contextual utterance/speaker metadata after a restart.
 	if data, readErr := os.ReadFile(translatedPath); readErr == nil {
 		var payload map[string]any
 		if json.Unmarshal(data, &payload) == nil {
