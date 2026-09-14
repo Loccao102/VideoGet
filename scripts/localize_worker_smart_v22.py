@@ -9,6 +9,7 @@ import utterance_translate_v22 as contextual_translate
 import localization_v2_quality as quality
 import localize_worker as worker
 import smart_render
+import translation_endpoint
 
 worker.fast.render_video = smart_render.render_video
 worker.fast.synthesize_segments = adaptive_tts.synthesize_segments
@@ -53,6 +54,13 @@ def contextual_translate_stage(
             worker.base.write_srt(vi_srt, translated, "vi")
         worker.base.log(f"V2.2 translation cache hit: {len(translated)} utterances")
         return translated, vi_srt, signature, True
+
+    # A provider/network outage is a job-level configuration failure, not a
+    # scene-level translation failure. Check it once before expensive retries.
+    info = translation_endpoint.require_translation_endpoint()
+    worker.base.log(
+        f"Translation endpoint ready: provider={info.get('provider')} base={info.get('baseUrl')}"
+    )
 
     translated_source = [dict(item) for item in segments]
     video_title = worker.clean_video_title(stem)
