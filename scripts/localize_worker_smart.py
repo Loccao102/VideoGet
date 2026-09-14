@@ -1,13 +1,31 @@
 #!/usr/bin/env python3
 """Persistent localization worker with smart preserve-frame rendering."""
 import json
+import os
 from pathlib import Path
 
+import adaptive_tts
 import localize_worker as worker
 import smart_render
 
-# localize_worker imports localize_fast as `fast`; replace only the final renderer.
+# localize_worker imports localize_fast as `fast`; replace the final renderer and
+# TTS stage while keeping the persistent Whisper/cache pipeline intact.
 worker.fast.render_video = smart_render.render_video
+worker.fast.synthesize_segments = adaptive_tts.synthesize_segments
+
+_original_tts_signature = worker.tts_signature
+
+
+def adaptive_tts_signature(translation_sig: dict) -> dict:
+    signature = _original_tts_signature(translation_sig)
+    signature["adaptiveSegments"] = True
+    signature["targetCharsPerSec"] = os.getenv("TTS_TARGET_CHARS_PER_SEC", "14")
+    signature["editorMaxRatePercent"] = os.getenv("TTS_EDITOR_MAX_RATE_PERCENT", "70")
+    signature["editorPostMaxSpeed"] = os.getenv("TTS_EDITOR_POST_MAX_SPEED", "1.35")
+    return signature
+
+
+worker.tts_signature = adaptive_tts_signature
 _original_process_job = worker.process_job
 
 
