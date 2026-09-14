@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 import adaptive_tts
-import contextual_translate
+import utterance_translate as contextual_translate
 import localize as base
 import localize_fast as fast
 import smart_render
