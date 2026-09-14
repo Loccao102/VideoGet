@@ -1,17 +1,8 @@
 #!/usr/bin/env python3
 """Localization V2 quality helpers.
 
-This module is intentionally dependency-free. It provides two safe building blocks
-that can run after translation without changing the rendered result:
-
-1. semantic block construction over raw ASR/subtitle segments, so later retrieval
-   and Translation Memory can work on meaningful chunks instead of tiny Whisper
-   fragments;
-2. deterministic translation QA for empty text, untranslated Chinese, lost numbers,
-   lost Latin/model tokens, and reading-speed pressure.
-
-The QA report is advisory for now: it surfaces quality issues to the editor and
-metadata without automatically rewriting approved/user-edited text.
+Provides semantic block construction plus deterministic translation QA. QA never
+silently rewrites generated/user text; it only reports review signals.
 """
 from __future__ import annotations
 
@@ -46,7 +37,7 @@ def _clean(value: object) -> str:
 
 
 def _source_text(segment: dict) -> str:
-    return _clean(segment.get("text") or segment.get("sourceText"))
+    return _clean(segment.get("sourceCorrected") or segment.get("text") or segment.get("sourceText"))
 
 
 def _vi_text(segment: dict) -> str:
@@ -69,8 +60,6 @@ def _normalized_numbers(text: str) -> set[str]:
 
 
 def _latin_tokens(text: str) -> set[str]:
-    # Only preserve source tokens that look like brands/models/technical names.
-    # Common English glue words are intentionally ignored.
     stop = {"the", "and", "for", "with", "this", "that", "from", "you", "your"}
     return {
         token.lower()
@@ -83,6 +72,7 @@ def analyze_segments(segments: Iterable[dict]) -> dict:
     warn_cps = _env_float("TRANSLATION_QA_WARN_CPS", 18.0, 1.0)
     error_cps = _env_float("TRANSLATION_QA_ERROR_CPS", 28.0, warn_cps)
     max_cjk_ratio = _env_float("TRANSLATION_QA_MAX_CJK_RATIO", 0.18, 0.0)
+    min_confidence = _env_float("TRANSLATION_QA_MIN_CONFIDENCE", 0.55, 0.0)
 
     issues: list[dict] = []
     rows = list(segments)
@@ -97,12 +87,7 @@ def analyze_segments(segments: Iterable[dict]) -> dict:
         cps = _visible_chars(vi) / duration if vi else 0.0
 
         def add(severity: str, code: str, detail: str) -> None:
-            issues.append({
-                "segmentId": seg_id,
-                "severity": severity,
-                "code": code,
-                "detail": detail,
-            })
+            issues.append({"segmentId": seg_id, "severity": severity, "code": code, "detail": detail})
 
         if not vi:
             add("error", "empty_translation", "Đoạn dịch tiếng Việt đang trống.")
@@ -112,51 +97,41 @@ def analyze_segments(segments: Iterable[dict]) -> dict:
         visible = max(1, _visible_chars(vi))
         cjk_ratio = cjk_count / visible
         if cjk_count >= 2 and cjk_ratio > max_cjk_ratio:
-            add(
-                "warning",
-                "untranslated_chinese",
-                f"Còn nhiều ký tự Trung trong bản dịch ({cjk_count} ký tự, {cjk_ratio:.0%}).",
-            )
+            add("warning", "untranslated_chinese", f"Còn nhiều ký tự Trung trong bản dịch ({cjk_count} ký tự, {cjk_ratio:.0%}).")
 
         source_numbers = _normalized_numbers(source)
         target_numbers = _normalized_numbers(vi)
         missing_numbers = sorted(source_numbers - target_numbers)
         if missing_numbers:
-            add(
-                "warning",
-                "number_changed_or_missing",
-                "Số/đơn vị nguồn không còn trong bản dịch: " + ", ".join(missing_numbers[:8]),
-            )
+            add("warning", "number_changed_or_missing", "Số/đơn vị nguồn không còn trong bản dịch: " + ", ".join(missing_numbers[:8]))
 
         source_tokens = _latin_tokens(source)
         target_lower = vi.lower()
         missing_tokens = sorted(token for token in source_tokens if token not in target_lower)
         if missing_tokens:
-            add(
-                "warning",
-                "brand_or_model_missing",
-                "Brand/model/thuật ngữ Latin có thể bị mất: " + ", ".join(missing_tokens[:8]),
-            )
+            add("warning", "brand_or_model_missing", "Brand/model/thuật ngữ Latin có thể bị mất: " + ", ".join(missing_tokens[:8]))
 
         if cps > error_cps:
-            add(
-                "error",
-                "reading_speed_critical",
-                f"Phụ đề quá dày: {cps:.1f} ký tự/giây trong {duration:.2f}s.",
-            )
+            add("error", "reading_speed_critical", f"Phụ đề quá dày: {cps:.1f} ký tự/giây trong {duration:.2f}s.")
         elif cps > warn_cps:
-            add(
-                "warning",
-                "reading_speed_high",
-                f"Phụ đề khá nhanh: {cps:.1f} ký tự/giây trong {duration:.2f}s.",
-            )
+            add("warning", "reading_speed_high", f"Phụ đề khá nhanh: {cps:.1f} ký tự/giây trong {duration:.2f}s.")
+
+        raw_confidence = segment.get("translationConfidence")
+        if raw_confidence not in (None, ""):
+            try:
+                confidence = float(raw_confidence)
+                if confidence < min_confidence:
+                    add("warning", "translation_confidence_low", f"Contextual translator không chắc về câu nguồn ({confidence:.2f}); nên review cùng video gốc.")
+            except (TypeError, ValueError):
+                pass
+
+        corrected = _clean(segment.get("sourceCorrected"))
+        original = _clean(segment.get("text") or segment.get("sourceText"))
+        if corrected and original and corrected != original:
+            add("warning", "asr_correction_suggested", f"Có gợi ý sửa ASR cần kiểm tra: {original} → {corrected}")
 
         if previous_vi and vi == previous_vi and source != previous_source:
-            add(
-                "warning",
-                "duplicate_translation",
-                "Hai đoạn nguồn khác nhau đang có cùng một bản dịch liên tiếp.",
-            )
+            add("warning", "duplicate_translation", "Hai đoạn nguồn khác nhau đang có cùng một bản dịch liên tiếp.")
         previous_vi = vi
         previous_source = source
 
@@ -164,7 +139,7 @@ def analyze_segments(segments: Iterable[dict]) -> dict:
     warnings = sum(1 for item in issues if item["severity"] == "warning")
     status = "error" if errors else "warning" if warnings else "pass"
     return {
-        "version": 1,
+        "version": 2,
         "status": status,
         "segments": len(rows),
         "errors": errors,
@@ -174,6 +149,7 @@ def analyze_segments(segments: Iterable[dict]) -> dict:
             "warnCharsPerSec": warn_cps,
             "errorCharsPerSec": error_cps,
             "maxChineseRatio": max_cjk_ratio,
+            "minTranslationConfidence": min_confidence,
         },
     }
 
@@ -208,14 +184,7 @@ def build_semantic_blocks(segments: Iterable[dict]) -> list[dict]:
         seg_id = segment.get("id", index)
 
         if current is None:
-            current = {
-                "id": len(blocks),
-                "segmentIds": [seg_id],
-                "start": start,
-                "end": end,
-                "sourceParts": [source] if source else [],
-                "viParts": [vi] if vi else [],
-            }
+            current = {"id": len(blocks), "segmentIds": [seg_id], "start": start, "end": end, "sourceParts": [source] if source else [], "viParts": [vi] if vi else []}
             continue
 
         gap = max(0.0, start - float(current["end"]))
@@ -226,14 +195,7 @@ def build_semantic_blocks(segments: Iterable[dict]) -> list[dict]:
 
         if gap > max_gap or proposed_duration > max_duration or proposed_chars > max_chars or strong_boundary:
             flush()
-            current = {
-                "id": len(blocks),
-                "segmentIds": [seg_id],
-                "start": start,
-                "end": end,
-                "sourceParts": [source] if source else [],
-                "viParts": [vi] if vi else [],
-            }
+            current = {"id": len(blocks), "segmentIds": [seg_id], "start": start, "end": end, "sourceParts": [source] if source else [], "viParts": [vi] if vi else []}
             continue
 
         current["segmentIds"].append(seg_id)
@@ -255,13 +217,5 @@ def write_quality_artifacts(output_dir: Path, stem: str, segments: Iterable[dict
     qa_path = output_dir / f"{stem}.translation-qa.json"
     blocks_path = output_dir / f"{stem}.semantic-blocks.json"
     qa_path.write_text(json.dumps(qa, ensure_ascii=False, indent=2), encoding="utf-8")
-    blocks_path.write_text(
-        json.dumps({"version": 1, "blocks": blocks}, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    return {
-        "qa": qa,
-        "qaFile": str(qa_path),
-        "semanticBlocks": len(blocks),
-        "semanticBlocksFile": str(blocks_path),
-    }
+    blocks_path.write_text(json.dumps({"version": 2, "blocks": blocks}, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"qa": qa, "qaFile": str(qa_path), "semanticBlocks": len(blocks), "semanticBlocksFile": str(blocks_path)}
