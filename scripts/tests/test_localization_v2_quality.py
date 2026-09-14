@@ -33,6 +33,23 @@ class LocalizationV2QualityTests(unittest.TestCase):
         self.assertEqual(blocks[0]["segmentIds"], [0, 1])
         self.assertEqual(blocks[1]["segmentIds"], [2])
 
+    def test_qa_flags_context_uncertainty_and_asr_repair_for_review(self):
+        report = quality.analyze_segments([
+            {
+                "id": 7,
+                "start": 4.0,
+                "end": 7.0,
+                "text": "儿子的财理钱",
+                "sourceCorrected": "儿子的彩礼钱",
+                "vi": "tiền sính lễ của con trai",
+                "translationConfidence": 0.42,
+            }
+        ])
+        codes = {item["code"] for item in report["issues"]}
+        self.assertIn("translation_confidence_low", codes)
+        self.assertIn("asr_correction_suggested", codes)
+        self.assertEqual(report["status"], "warning")
+
     def test_qa_passes_clean_translation(self):
         report = quality.analyze_segments([
             {
@@ -41,6 +58,7 @@ class LocalizationV2QualityTests(unittest.TestCase):
                 "end": 3.0,
                 "text": "Xiaomi 15 有 5000mAh 电池",
                 "vi": "Xiaomi 15 có pin 5000mAh.",
+                "translationConfidence": 0.9,
             }
         ])
         self.assertEqual(report["status"], "pass")
