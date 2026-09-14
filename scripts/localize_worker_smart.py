@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 
 import adaptive_tts
-import contextual_translate
+import utterance_translate as contextual_translate
 import localization_v2_quality as quality
 import localize_worker as worker
 import smart_render
@@ -72,7 +72,7 @@ def contextual_translate_stage(
         item.pop("_videoTitle", None)
 
     worker.base.write_srt(vi_srt, translated, "vi")
-    worker.write_cache(cache_path, signature, contextualTranslation=True, segments=translated)
+    worker.write_cache(cache_path, signature, contextualTranslation=True, utteranceFirst=True, segments=translated)
     contextual_translate.write_context_artifact(output_dir, stem, story)
     return translated, vi_srt, signature, False
 
