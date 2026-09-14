@@ -40,3 +40,26 @@ func TestSubtitleSRTTime(t *testing.T) {
 		}
 	}
 }
+
+func TestToSubtitleSegmentsPreservesSceneMetadata(t *testing.T) {
+	items := []pipelineSubtitleSegment{{
+		ID:               12,
+		SourceSegmentIDs: []int{12, 13, 14},
+		SceneID:          3,
+		Start:            4.2,
+		End:              7.8,
+		Text:             "原始字幕",
+		VI:               "Bản dịch theo cả câu.",
+		UtteranceID:      "s3:u2",
+	}}
+	got := toSubtitleSegments(items)
+	if len(got) != 1 {
+		t.Fatalf("got %d segments, want 1", len(got))
+	}
+	if got[0].SceneID != 3 {
+		t.Fatalf("SceneID=%d, want 3", got[0].SceneID)
+	}
+	if len(got[0].SourceSegmentIDs) != 3 || got[0].SourceSegmentIDs[1] != 13 {
+		t.Fatalf("SourceSegmentIDs=%v, want [12 13 14]", got[0].SourceSegmentIDs)
+	}
+}
