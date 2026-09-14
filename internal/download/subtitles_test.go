@@ -41,7 +41,7 @@ func TestSubtitleSRTTime(t *testing.T) {
 	}
 }
 
-func TestToSubtitleSegmentsPreservesSceneMetadata(t *testing.T) {
+func TestToSubtitleSegmentsPreservesSceneAndVoiceMetadata(t *testing.T) {
 	items := []pipelineSubtitleSegment{{
 		ID:               12,
 		SourceSegmentIDs: []int{12, 13, 14},
@@ -51,6 +51,8 @@ func TestToSubtitleSegmentsPreservesSceneMetadata(t *testing.T) {
 		Text:             "原始字幕",
 		VI:               "Bản dịch theo cả câu.",
 		UtteranceID:      "s3:u2",
+		VoiceGender:      "female",
+		AppliedVoice:     "vi-VN-HoaiMyNeural",
 	}}
 	got := toSubtitleSegments(items)
 	if len(got) != 1 {
@@ -61,5 +63,26 @@ func TestToSubtitleSegmentsPreservesSceneMetadata(t *testing.T) {
 	}
 	if len(got[0].SourceSegmentIDs) != 3 || got[0].SourceSegmentIDs[1] != 13 {
 		t.Fatalf("SourceSegmentIDs=%v, want [12 13 14]", got[0].SourceSegmentIDs)
+	}
+	if got[0].VoiceGender != "female" {
+		t.Fatalf("VoiceGender=%q, want female", got[0].VoiceGender)
+	}
+	if got[0].AppliedVoice != "vi-VN-HoaiMyNeural" {
+		t.Fatalf("AppliedVoice=%q", got[0].AppliedVoice)
+	}
+}
+
+func TestContextGenderNormalization(t *testing.T) {
+	if got := normalizeContextGender(" FEMALE "); got != "female" {
+		t.Fatalf("normalizeContextGender=%q", got)
+	}
+	if got := normalizeContextGender("other"); got != "unknown" {
+		t.Fatalf("normalizeContextGender(other)=%q", got)
+	}
+	if got := normalizeVoiceGender("MALE"); got != "male" {
+		t.Fatalf("normalizeVoiceGender=%q", got)
+	}
+	if got := normalizeVoiceGender(""); got != "auto" {
+		t.Fatalf("normalizeVoiceGender(empty)=%q", got)
 	}
 }
