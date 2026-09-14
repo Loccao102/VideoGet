@@ -24,6 +24,8 @@ func WithSubtitleRoutes(next http.Handler, jobs *download.Manager) http.Handler 
 	mux.HandleFunc("GET /api/jobs/{id}/subtitles", server.getSubtitles)
 	mux.HandleFunc("GET /api/jobs/{id}/subtitles/quality", server.getSubtitleQuality)
 	mux.HandleFunc("GET /api/jobs/{id}/subtitles/context", server.getSubtitleContext)
+	mux.HandleFunc("GET /api/jobs/{id}/subtitles/context-overrides", server.getSubtitleContextOverrides)
+	mux.HandleFunc("PUT /api/jobs/{id}/subtitles/context-overrides", server.saveSubtitleContextOverrides)
 	mux.HandleFunc("PUT /api/jobs/{id}/subtitles", server.saveSubtitles)
 	mux.HandleFunc("POST /api/jobs/{id}/subtitles/retranslate", server.retranslateSubtitles)
 	mux.HandleFunc("POST /api/jobs/{id}/subtitles/regenerate-tts", server.rerenderSubtitles)
@@ -64,6 +66,37 @@ func (s *subtitleServer) getSubtitleContext(w http.ResponseWriter, r *http.Reque
 	document, err := s.jobs.GetSubtitleContext(r.PathValue("id"))
 	if err != nil {
 		status := http.StatusConflict
+		if strings.Contains(err.Error(), "not found") {
+			status = http.StatusNotFound
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, document)
+}
+
+func (s *subtitleServer) getSubtitleContextOverrides(w http.ResponseWriter, r *http.Request) {
+	document, err := s.jobs.GetSubtitleContextOverrides(r.PathValue("id"))
+	if err != nil {
+		status := http.StatusConflict
+		if strings.Contains(err.Error(), "not found") {
+			status = http.StatusNotFound
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, document)
+}
+
+func (s *subtitleServer) saveSubtitleContextOverrides(w http.ResponseWriter, r *http.Request) {
+	var update download.SubtitleContextOverrides
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&update); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	document, err := s.jobs.SaveSubtitleContextOverrides(r.PathValue("id"), update)
+	if err != nil {
+		status := http.StatusBadRequest
 		if strings.Contains(err.Error(), "not found") {
 			status = http.StatusNotFound
 		}
