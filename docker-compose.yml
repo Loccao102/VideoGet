@@ -114,7 +114,9 @@ services:
     volumes:
       - ./downloads:/app/downloads
       - whisper-cache:/root/.cache
+      - douyin-auth:/root/.config/douyin-cli
     restart: unless-stopped
 
 volumes:
   whisper-cache:
+  douyin-auth:
