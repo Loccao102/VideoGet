@@ -34,6 +34,8 @@ jobs:
           scripts/localize_worker_smart.py
           scripts/adaptive_tts.py
           scripts/rerender_subtitles.py
+          scripts/retranslate_subtitles.py
+          scripts/contextual_translate.py
           scripts/localization_v2_quality.py
       - name: Test Localization V2 quality helpers
         run: python -m unittest discover -s scripts/tests -p 'test_*.py'
