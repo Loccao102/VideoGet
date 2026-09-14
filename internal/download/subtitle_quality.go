@@ -33,6 +33,12 @@ type SubtitleQualityDocument struct {
 	SemanticBlocksFile string                `json:"semanticBlocksFile"`
 }
 
+type SubtitleContextDocument struct {
+	JobID       string         `json:"jobId"`
+	Context     map[string]any `json:"context"`
+	ContextFile string         `json:"contextFile"`
+}
+
 func (m *Manager) GetSubtitleQuality(id string) (SubtitleQualityDocument, error) {
 	job, ok := m.Get(strings.TrimSpace(id))
 	if !ok {
@@ -71,4 +77,25 @@ func (m *Manager) GetSubtitleQuality(id string) (SubtitleQualityDocument, error)
 		QAFile:             qaPath,
 		SemanticBlocksFile: blocksPath,
 	}, nil
+}
+
+func (m *Manager) GetSubtitleContext(id string) (SubtitleContextDocument, error) {
+	job, ok := m.Get(strings.TrimSpace(id))
+	if !ok {
+		return SubtitleContextDocument{}, fmt.Errorf("job not found")
+	}
+	localizedDir, stem, _, _, _, _, _, _, err := m.subtitlePaths(job)
+	if err != nil {
+		return SubtitleContextDocument{}, err
+	}
+	contextPath := filepath.Join(localizedDir, stem+".translation-context.json")
+	data, err := os.ReadFile(contextPath)
+	if err != nil {
+		return SubtitleContextDocument{}, fmt.Errorf("translation context is unavailable")
+	}
+	var context map[string]any
+	if err := json.Unmarshal(data, &context); err != nil {
+		return SubtitleContextDocument{}, fmt.Errorf("invalid translation context: %w", err)
+	}
+	return SubtitleContextDocument{JobID: job.ID, Context: context, ContextFile: contextPath}, nil
 }
