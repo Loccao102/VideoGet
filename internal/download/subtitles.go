@@ -26,6 +26,9 @@ type SubtitleSegment struct {
 	UtteranceID           string  `json:"utteranceId,omitempty"`
 	Speaker               string  `json:"speaker,omitempty"`
 	TranslationConfidence float64 `json:"translationConfidence,omitempty"`
+	Voice                 string  `json:"voice,omitempty"`
+	VoiceGender           string  `json:"voiceGender,omitempty"`
+	AppliedVoice          string  `json:"appliedVoice,omitempty"`
 }
 
 type SubtitleDocument struct {
@@ -55,6 +58,9 @@ type pipelineSubtitleSegment struct {
 	UtteranceID           string  `json:"utteranceId,omitempty"`
 	Speaker               string  `json:"speaker,omitempty"`
 	TranslationConfidence float64 `json:"translationConfidence,omitempty"`
+	Voice                 string  `json:"voice,omitempty"`
+	VoiceGender           string  `json:"voiceGender,omitempty"`
+	AppliedVoice          string  `json:"appliedVoice,omitempty"`
 }
 
 type subtitleDraft struct {
@@ -151,6 +157,9 @@ func toSubtitleSegments(items []pipelineSubtitleSegment) []SubtitleSegment {
 			UtteranceID:           item.UtteranceID,
 			Speaker:               item.Speaker,
 			TranslationConfidence: item.TranslationConfidence,
+			Voice:                 item.Voice,
+			VoiceGender:           defaultVoiceGender(item.VoiceGender),
+			AppliedVoice:          item.AppliedVoice,
 		})
 	}
 	return out
@@ -162,6 +171,14 @@ func defaultSpeechRate(value string) string {
 		return "auto"
 	}
 	return value
+}
+
+func defaultVoiceGender(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "male" || value == "female" {
+		return value
+	}
+	return "auto"
 }
 
 func (m *Manager) SaveSubtitles(id string, update SubtitleUpdate) (SubtitleDocument, error) {
@@ -251,6 +268,15 @@ func (m *Manager) SaveSubtitles(id string, update SubtitleUpdate) (SubtitleDocum
 		if sceneID <= 0 {
 			sceneID = previous.SceneID
 		}
+		voice := strings.TrimSpace(item.Voice)
+		if voice == "" {
+			voice = strings.TrimSpace(previous.Voice)
+		}
+		voiceGender := strings.TrimSpace(item.VoiceGender)
+		if voiceGender == "" {
+			voiceGender = previous.VoiceGender
+		}
+		voiceGender = defaultVoiceGender(voiceGender)
 
 		pipeline = append(pipeline, pipelineSubtitleSegment{
 			ID:                    item.ID,
@@ -265,11 +291,13 @@ func (m *Manager) SaveSubtitles(id string, update SubtitleUpdate) (SubtitleDocum
 			UtteranceID:           utteranceID,
 			Speaker:               speaker,
 			TranslationConfidence: confidence,
+			Voice:                 voice,
+			VoiceGender:           voiceGender,
 		})
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
-	draft := subtitleDraft{Version: 4, JobID: job.ID, EditedAt: now, Segments: pipeline}
+	draft := subtitleDraft{Version: 5, JobID: job.ID, EditedAt: now, Segments: pipeline}
 	if err := writeJSONAtomic(draftPath, draft); err != nil {
 		return SubtitleDocument{}, err
 	}
@@ -278,7 +306,7 @@ func (m *Manager) SaveSubtitles(id string, update SubtitleUpdate) (SubtitleDocum
 	}
 
 	// Keep the persistent worker's translation cache aligned with manual edits.
-	// This also preserves contextual utterance/scene/speaker metadata after a restart.
+	// This also preserves contextual utterance/scene/speaker/voice metadata after a restart.
 	if data, readErr := os.ReadFile(translatedPath); readErr == nil {
 		var payload map[string]any
 		if json.Unmarshal(data, &payload) == nil {
@@ -296,8 +324,8 @@ func (m *Manager) SaveSubtitles(id string, update SubtitleUpdate) (SubtitleDocum
 		}
 	}
 
-	// A text/timing edit invalidates generated voice. Keep the old final MP4 so the
-	// user can still compare it until the explicit re-render finishes.
+	// A text/timing/voice edit invalidates generated voice. Keep the old final MP4
+	// so the user can still compare it until the explicit re-render finishes.
 	_ = os.Remove(ttsCache)
 	_ = os.Remove(voiceTrack)
 
