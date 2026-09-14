@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,6 +29,7 @@ func WithSubtitleRoutes(next http.Handler, jobs *download.Manager) http.Handler 
 	mux.HandleFunc("PUT /api/jobs/{id}/subtitles/context-overrides", server.saveSubtitleContextOverrides)
 	mux.HandleFunc("PUT /api/jobs/{id}/subtitles", server.saveSubtitles)
 	mux.HandleFunc("POST /api/jobs/{id}/subtitles/retranslate", server.retranslateSubtitles)
+	mux.HandleFunc("POST /api/jobs/{id}/subtitles/tts-preview", server.previewSubtitleTTS)
 	mux.HandleFunc("POST /api/jobs/{id}/subtitles/regenerate-tts", server.rerenderSubtitles)
 	// Backward-compatible alias used by the first V2 editor build.
 	mux.HandleFunc("POST /api/jobs/{id}/subtitles/rerender", server.rerenderSubtitles)
@@ -143,6 +145,33 @@ func (s *subtitleServer) retranslateSubtitles(w http.ResponseWriter, r *http.Req
 		return
 	}
 	writeJSON(w, http.StatusAccepted, job)
+}
+
+func (s *subtitleServer) previewSubtitleTTS(w http.ResponseWriter, r *http.Request) {
+	var request download.SubtitleTTSPreviewRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	preview, err := s.jobs.PreviewSubtitleTTS(r.PathValue("id"), request)
+	if err != nil {
+		status := http.StatusBadRequest
+		if strings.Contains(err.Error(), "job not found") || strings.Contains(err.Error(), "segment not found") {
+			status = http.StatusNotFound
+		} else if strings.Contains(err.Error(), "disabled") {
+			status = http.StatusConflict
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "audio/mpeg")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-VideoGet-TTS-Voice", preview.Voice)
+	w.Header().Set("X-VideoGet-TTS-Rate", preview.SpeechRate)
+	w.Header().Set("X-VideoGet-TTS-Duration-Ms", strconv.Itoa(preview.DurationMs))
+	w.Header().Set("X-VideoGet-TTS-Slot-Ms", strconv.Itoa(preview.SlotMs))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(preview.Audio)
 }
 
 func (s *subtitleServer) rerenderSubtitles(w http.ResponseWriter, r *http.Request) {
