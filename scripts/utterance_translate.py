@@ -24,6 +24,51 @@ _CONTEXT_VERSION = 2
 _CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
 
 
+def _chat_json(system: str, user: str, *, temperature: float = 0.05, model_override: str | None = None) -> dict:
+    provider = v3._provider()
+    timeout = v3._env_int("TRANSLATE_TIMEOUT_SEC", 180, 30)
+    model = v3._clean(model_override)
+    if provider == "ollama":
+        model = model or os.getenv("OLLAMA_MODEL", "qwen3:8b").strip()
+        payload = {
+            "model": model,
+            "stream": False,
+            "think": False,
+            "format": "json",
+            "keep_alive": os.getenv("OLLAMA_KEEP_ALIVE", "15m"),
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "options": {"temperature": max(0.0, float(temperature))},
+        }
+        response = base.http_json(v3._ollama_base() + "/api/chat", payload, timeout=timeout)
+        content = str((response.get("message") or {}).get("content", ""))
+    else:
+        base_url = os.getenv("OPENAI_COMPAT_BASE_URL", "http://host.docker.internal:11434/v1").rstrip("/")
+        model = model or os.getenv("OPENAI_COMPAT_MODEL", "").strip()
+        api_key = os.getenv("OPENAI_COMPAT_API_KEY", "")
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        payload = {
+            "model": model,
+            "temperature": max(0.0, float(temperature)),
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "response_format": {"type": "json_object"},
+        }
+        response = base.http_json(base_url + "/chat/completions", payload, headers=headers, timeout=timeout)
+        choices = response.get("choices") or []
+        if not choices:
+            raise RuntimeError("translation endpoint returned no choices")
+        content = str((choices[0].get("message") or {}).get("content", ""))
+    parsed = base.extract_json(content)
+    if not isinstance(parsed, dict):
+        raise RuntimeError("translation endpoint did not return a JSON object")
+    return parsed
+
+
 def translation_signature(transcript_signature: dict, *, profile: str | None = None, instruction: str | None = None) -> dict:
     signature = v3.translation_signature(transcript_signature, profile=profile, instruction=instruction)
     signature.update({
@@ -200,7 +245,7 @@ QUY TẮC BẮT BUỘC:
 JSON:
 {{"utterances":[{{"sourceIds":[1,2],"vi":"...","sourceCorrected":"","speaker":"","confidence":0.9}}]}}
 """.strip()
-    payload = v3._chat_json(_system_for_profile(profile), prompt, temperature=0.07)
+    payload = _chat_json(_system_for_profile(profile), prompt, temperature=0.07)
     return _normalize_utterances(payload.get("utterances"), [int(row["id"]) for row in rows])
 
 
@@ -231,7 +276,7 @@ JSON:
     )
     model = os.getenv("TRANSLATE_REVIEW_MODEL", "").strip() or None
     try:
-        payload = v3._chat_json(system, prompt, temperature=0.01, model_override=model)
+        payload = _chat_json(system, prompt, temperature=0.01, model_override=model)
         return _normalize_utterances(payload.get("utterances"), [int(row["id"]) for row in rows])
     except Exception as error:
         base.log(f"Translation reviewer fallback on scene {scene_id + 1}: {error}")
