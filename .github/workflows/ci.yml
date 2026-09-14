@@ -44,6 +44,7 @@ jobs:
           scripts/utterance_translate.py
           scripts/utterance_translate_v22.py
           scripts/utterance_translate_v23.py
+          scripts/utterance_translate_v24.py
           scripts/localization_v2_quality.py
       - name: Test Localization V2 helpers
         run: python -m unittest discover -s scripts/tests -p 'test_*.py'
