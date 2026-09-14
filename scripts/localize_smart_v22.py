@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+"""One-shot localization entrypoint using V2.2 translation roles."""
+import json
+import sys
+from pathlib import Path
+
+import adaptive_tts
+import utterance_translate_v22 as contextual_translate
+import localize as base
+import localize_fast as fast
+import smart_render
+
+fast.TRANSLATION_PROMPT_VERSION = contextual_translate.TRANSLATION_PROMPT_VERSION
+fast.translate_segments = contextual_translate.translate_segments
+base.translate_segments = contextual_translate.translate_segments
+fast.synthesize_segments = adaptive_tts.synthesize_segments
+base.synthesize_segments = adaptive_tts.synthesize_segments
+base.render_video = smart_render.render_video
+
+
+def input_arg() -> str:
+    try:
+        index = sys.argv.index("--input")
+        return str(Path(sys.argv[index + 1]).resolve())
+    except (ValueError, IndexError):
+        return ""
+
+
+if __name__ == "__main__":
+    try:
+        base.main()
+    except RuntimeError as error:
+        if "Whisper did not detect any speech" in str(error):
+            print(
+                json.dumps(
+                    {
+                        "outputVideo": input_arg(),
+                        "segments": 0,
+                        "skippedReason": "no_speech",
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            base.log(f"ERROR: {error}")
+            sys.exit(1)
+    except Exception as error:
+        base.log(f"ERROR: {error}")
+        sys.exit(1)
