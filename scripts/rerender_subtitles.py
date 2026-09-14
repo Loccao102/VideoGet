@@ -74,6 +74,11 @@ def main() -> None:
         shutil.copy2(voice_temp, voice_track)
     tts_seconds = round(time.perf_counter() - stage, 3)
 
+    rendered_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    edit["segments"] = segments
+    edit["renderedAt"] = rendered_at
+    edit_path.write_text(json.dumps(edit, ensure_ascii=False, indent=2), encoding="utf-8")
+
     output_video = output_dir / f"{stem}.vi-dubbed.mp4"
     stage = time.perf_counter()
     smart_render.render_video(input_path, voice_track, vi_srt, output_video)
@@ -93,8 +98,9 @@ def main() -> None:
             "voiceTrack": str(voice_track),
             "outputVideo": str(output_video),
             "subtitleEdited": True,
+            "subtitleDraftPending": False,
             "subtitleEditFile": str(edit_path),
-            "lastRerenderAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "lastRerenderAt": rendered_at,
         }
     )
     metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
