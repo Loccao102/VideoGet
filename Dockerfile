@@ -18,12 +18,14 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     apt-get update \
     && apt-get install -y --no-install-recommends \
-        ca-certificates \
-        curl \
-        ffmpeg \
-        fonts-noto-core \
-        fonts-noto-cjk \
-        fonts-noto-color-emoji
+    ca-certificates \
+    curl \
+    ffmpeg \
+    nodejs \
+    npm \
+    fonts-noto-core \
+    fonts-noto-cjk \
+    fonts-noto-color-emoji
 
 RUN pip install --no-cache-dir \
     yt-dlp==2026.8.19 \
