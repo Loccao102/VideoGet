@@ -9,10 +9,20 @@ import utterance_translate_v22 as contextual_translate
 import localize as base
 import localize_fast as fast
 import smart_render
+import translation_endpoint
 
 fast.TRANSLATION_PROMPT_VERSION = contextual_translate.TRANSLATION_PROMPT_VERSION
-fast.translate_segments = contextual_translate.translate_segments
-base.translate_segments = contextual_translate.translate_segments
+
+
+def checked_translate_segments(segments: list[dict], detected_language: str):
+    # Fail once with an actionable provider/network error instead of letting the
+    # scene translator repeatedly retry an unreachable endpoint.
+    translation_endpoint.require_translation_endpoint()
+    return contextual_translate.translate_segments(segments, detected_language)
+
+
+fast.translate_segments = checked_translate_segments
+base.translate_segments = checked_translate_segments
 fast.synthesize_segments = adaptive_tts.synthesize_segments
 base.synthesize_segments = adaptive_tts.synthesize_segments
 base.render_video = smart_render.render_video
