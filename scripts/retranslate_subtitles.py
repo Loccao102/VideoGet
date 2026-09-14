@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Re-translate an existing VideoGet transcript without running Whisper again.
 
-The command is used by the Subtitle Editor. It rebuilds Vietnamese subtitles with
-Localization V2 contextual translation, writes a reviewable draft, invalidates TTS,
-and keeps the current rendered MP4 untouched until the user explicitly regenerates
-voice/render.
+Localization V2.1 translates scene/utterance units, writes a reviewable draft,
+invalidates stale TTS, and keeps the current rendered MP4 untouched until the user
+explicitly regenerates voice/render.
 """
 from __future__ import annotations
 
@@ -13,7 +12,7 @@ import json
 import time
 from pathlib import Path
 
-import contextual_translate
+import utterance_translate as contextual_translate
 import localization_v2_quality as quality
 import localize as base
 
@@ -107,6 +106,7 @@ def main() -> None:
     translated_payload = {
         "signature": signature,
         "contextualTranslation": True,
+        "utteranceFirst": True,
         "segments": translated,
     }
     translated_path.write_text(json.dumps(translated_payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -114,12 +114,13 @@ def main() -> None:
 
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     draft_payload = {
-        "version": 2,
+        "version": 3,
         "jobId": str(existing_draft.get("jobId") or ""),
         "editedAt": now,
         "retranslatedAt": now,
         "profile": profile,
         "instruction": instruction,
+        "utteranceFirst": True,
         "segments": translated,
     }
     draft_path.write_text(json.dumps(draft_payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -127,8 +128,6 @@ def main() -> None:
     context_path = contextual_translate.write_context_artifact(output_dir, stem, story)
     report = quality.write_quality_artifacts(output_dir, stem, translated)
 
-    # Translation changed: generated voice is now stale. Keep the old MP4 until
-    # the user explicitly requests TTS/render so before/after remains comparable.
     tts_cache.unlink(missing_ok=True)
     voice_track.unlink(missing_ok=True)
 
@@ -141,6 +140,7 @@ def main() -> None:
         "subtitleRetranslatedAt": now,
         "translationProfile": profile,
         "translationContextFile": context_path,
+        "utteranceFirst": True,
         "translationQA": {
             "status": report["qa"].get("status", "pass"),
             "errors": report["qa"].get("errors", 0),
