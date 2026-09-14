@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Subtitle retranslation compatibility entrypoint with approved context locks."""
+"""Subtitle retranslation compatibility entrypoint using Localization V2.4."""
 from __future__ import annotations
 
 import os
@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import retranslate_subtitles as legacy
+import translation_endpoint
 import utterance_translate_v24 as translator
 
 
@@ -29,6 +30,15 @@ def configure_overrides_path() -> None:
 
 
 configure_overrides_path()
+_original_translate_contextual = translator.translate_contextual
+
+
+def checked_translate_contextual(*args, **kwargs):
+    translation_endpoint.require_translation_endpoint()
+    return _original_translate_contextual(*args, **kwargs)
+
+
+translator.translate_contextual = checked_translate_contextual
 legacy.contextual_translate = translator
 
 if __name__ == "__main__":
