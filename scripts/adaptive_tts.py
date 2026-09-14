@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """Adaptive Vietnamese TTS for editable subtitles.
 
-Each subtitle segment owns its timing slot. Longer Vietnamese text automatically
-gets a faster Edge TTS speaking rate before a final loss-minimizing fit pass.
-A segment can override the automatic rate with `speechRate` (for example +20%).
+Localization V2 can attach `utteranceId` to adjacent subtitle cues that belong to
+the same spoken sentence. Those cues are synthesized as one Edge TTS request so
+short-drama dialogue does not sound like a robot stopping every 1 second. Jobs
+without `utteranceId` keep the original per-segment behaviour.
+
+Long Vietnamese text automatically receives a faster Edge TTS speaking rate before
+a conservative final waveform fit. A segment can still override automatic rate via
+`speechRate` (for example +20%).
 """
 import asyncio
 import os
@@ -30,6 +35,13 @@ def env_float(name: str, default: float, minimum: float = 0.0) -> float:
         return max(minimum, default)
 
 
+def env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
 def clean_text(value: str) -> str:
     value = str(value or "").replace("\u200b", " ").replace("\ufeff", " ")
     return " ".join(value.split()).strip()
@@ -54,27 +66,113 @@ def edge_rate(percent: int) -> str:
     return f"{percent:+d}%"
 
 
-def auto_rate_percent(segment: dict) -> int:
+def _rate_policy(segment: dict) -> str:
+    return str(segment.get("speechRate", "auto") or "auto").strip().lower() or "auto"
+
+
+def auto_rate_percent_for_slot(text: str, start: float, end: float, override: str = "auto") -> int:
     base_rate = parse_rate(os.getenv("TTS_RATE", "+8%"), 8)
-    override = str(segment.get("speechRate", "auto") or "auto").strip().lower()
     min_rate = env_int("TTS_EDITOR_MIN_RATE_PERCENT", max(-20, base_rate), -80)
     max_rate = env_int("TTS_EDITOR_MAX_RATE_PERCENT", 70, 0)
+    override = str(override or "auto").strip().lower()
     if override and override != "auto":
         return max(min_rate, min(max_rate, parse_rate(override, base_rate)))
 
-    start = float(segment.get("start", 0.0))
-    end = float(segment.get("end", start + 0.15))
-    duration = max(0.15, end - start)
-    text = clean_text(segment.get("vi", ""))
-    # Count visible characters rather than spaces. Vietnamese short-form subtitles
-    # are comfortable around 13-15 visible chars/s; above that we ask TTS to speak
-    # faster instead of simply truncating the resulting audio.
-    visible_chars = len(re.sub(r"\s+", "", text))
+    duration = max(0.15, float(end) - float(start))
+    visible_chars = len(re.sub(r"\s+", "", clean_text(text)))
     target_cps = env_float("TTS_TARGET_CHARS_PER_SEC", 14.0, 6.0)
     cps = visible_chars / duration if duration > 0 else target_cps
     ratio = max(1.0, cps / target_cps)
     required = base_rate + int(round((ratio - 1.0) * 100.0))
     return max(min_rate, min(max_rate, required))
+
+
+def auto_rate_percent(segment: dict) -> int:
+    start = float(segment.get("start", 0.0))
+    end = float(segment.get("end", start + 0.15))
+    return auto_rate_percent_for_slot(
+        clean_text(segment.get("vi", "")),
+        start,
+        end,
+        _rate_policy(segment),
+    )
+
+
+def build_tts_units(segments: list[dict]) -> list[dict]:
+    """Group adjacent cues that the contextual translator marked as one utterance."""
+    active = [segment for segment in segments if clean_text(segment.get("vi", ""))]
+    if not active:
+        return []
+    if not env_bool("TTS_GROUP_CONTEXTUAL_UTTERANCES", True):
+        return [
+            {
+                "segments": [segment],
+                "start": float(segment.get("start", 0.0)),
+                "end": float(segment.get("end", 0.0)),
+                "text": clean_text(segment.get("vi", "")),
+                "speechRate": _rate_policy(segment),
+                "utteranceId": str(segment.get("utteranceId", "") or ""),
+            }
+            for segment in active
+        ]
+
+    max_duration = env_float("TTS_UTTERANCE_MAX_DURATION_SEC", 8.0, 1.0)
+    max_chars = env_int("TTS_UTTERANCE_MAX_CHARS", 180, 30)
+    max_gap = env_float("TTS_UTTERANCE_MAX_GAP_SEC", 0.45, 0.0)
+    units: list[dict] = []
+    current: dict | None = None
+
+    def flush() -> None:
+        nonlocal current
+        if current is None:
+            return
+        current["text"] = " ".join(clean_text(item.get("vi", "")) for item in current["segments"]).strip()
+        units.append(current)
+        current = None
+
+    for segment in active:
+        start = float(segment.get("start", 0.0))
+        end = float(segment.get("end", start + 0.15))
+        utterance = str(segment.get("utteranceId", "") or "").strip()
+        speaker = str(segment.get("speaker", "") or "").strip()
+        policy = _rate_policy(segment)
+        text = clean_text(segment.get("vi", ""))
+
+        if current is None:
+            current = {
+                "segments": [segment],
+                "start": start,
+                "end": end,
+                "utteranceId": utterance,
+                "speaker": speaker,
+                "speechRate": policy,
+            }
+            continue
+
+        gap = max(0.0, start - float(current["end"]))
+        proposed_duration = end - float(current["start"])
+        proposed_chars = len(" ".join(clean_text(item.get("vi", "")) for item in current["segments"])) + 1 + len(text)
+        same_utterance = bool(utterance) and utterance == current.get("utteranceId")
+        speaker_compatible = not speaker or not current.get("speaker") or speaker == current.get("speaker")
+        rate_compatible = policy == current.get("speechRate")
+
+        if same_utterance and speaker_compatible and rate_compatible and gap <= max_gap and proposed_duration <= max_duration and proposed_chars <= max_chars:
+            current["segments"].append(segment)
+            current["end"] = end
+            if speaker and not current.get("speaker"):
+                current["speaker"] = speaker
+        else:
+            flush()
+            current = {
+                "segments": [segment],
+                "start": start,
+                "end": end,
+                "utteranceId": utterance,
+                "speaker": speaker,
+                "speechRate": policy,
+            }
+    flush()
+    return units
 
 
 async def synthesize_file(text: str, output: Path, voice: str, rate: str, label: str) -> None:
@@ -117,36 +215,41 @@ async def synthesize_segments(segments: list[dict], workdir: Path, total_ms: int
     concurrency = env_int("TTS_EDITOR_CONCURRENCY", 3, 1)
     gain_db = env_float("TTS_GAIN_DB", 0.0, -30.0)
     semaphore = asyncio.Semaphore(concurrency)
+    units = build_tts_units(segments)
 
-    active = [segment for segment in segments if clean_text(segment.get("vi", ""))]
-
-    async def render_one(index: int, segment: dict):
+    async def render_one(index: int, unit: dict):
         async with semaphore:
-            text = clean_text(segment.get("vi", ""))
-            start_ms = max(0, int(float(segment.get("start", 0.0)) * 1000))
-            end_ms = max(start_ms + 150, int(float(segment.get("end", 0.0)) * 1000))
-            rate_percent = auto_rate_percent(segment)
+            text = clean_text(unit.get("text", ""))
+            start_ms = max(0, int(float(unit.get("start", 0.0)) * 1000))
+            end_ms = max(start_ms + 150, int(float(unit.get("end", 0.0)) * 1000))
+            rate_percent = auto_rate_percent_for_slot(
+                text,
+                float(unit.get("start", 0.0)),
+                float(unit.get("end", 0.0)),
+                str(unit.get("speechRate", "auto")),
+            )
             output = workdir / f"tts_edit_{index:05}.mp3"
-            await synthesize_file(text, output, voice, edge_rate(rate_percent), f"TTS segment {index + 1}")
+            label = f"TTS utterance {index + 1}" if len(unit.get("segments") or []) > 1 else f"TTS segment {index + 1}"
+            await synthesize_file(text, output, voice, edge_rate(rate_percent), label)
             clip = AudioSegment.from_file(output).set_frame_rate(48000).set_channels(1)
             clip = fit_clip(clip, end_ms - start_ms)
             if gain_db:
                 clip += gain_db
             return index, start_ms, clip, rate_percent
 
-    rendered = await asyncio.gather(*(render_one(i, item) for i, item in enumerate(active)))
+    rendered = await asyncio.gather(*(render_one(i, unit) for i, unit in enumerate(units)))
     track = AudioSegment.silent(duration=total_ms + 500, frame_rate=48000).set_channels(1)
     for _, start_ms, clip, _ in rendered:
         track = track.overlay(clip, position=start_ms)
 
-    # Persist the actually selected automatic rate into the in-memory segment list.
-    # This is useful for the subtitle editor after the worker writes localization.json.
-    active_index = {id(segment): segment for segment in active}
     for rendered_index, _, _, rate_percent in rendered:
-        segment = active[rendered_index]
-        segment["appliedSpeechRate"] = edge_rate(rate_percent)
-        if id(segment) in active_index and not segment.get("speechRate"):
-            segment["speechRate"] = "auto"
+        unit = units[rendered_index]
+        for segment in unit.get("segments") or []:
+            segment["appliedSpeechRate"] = edge_rate(rate_percent)
+            if not segment.get("speechRate"):
+                segment["speechRate"] = "auto"
+            if len(unit.get("segments") or []) > 1:
+                segment["ttsGrouped"] = True
 
     output = workdir / "voice_vi.wav"
     track[:total_ms].export(output, format="wav")

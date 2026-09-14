@@ -40,7 +40,7 @@ COPY --from=go-builder /out/videoget /usr/local/bin/videoget
 COPY scripts /app/scripts
 
 WORKDIR /app
-RUN mkdir -p /app/downloads /root/.cache
+RUN mkdir -p /app/downloads /root/.cache /root/.config/douyin-cli
 
 ENV PYTHONUNBUFFERED=1 \
     ADDR=:8080 \
@@ -110,6 +110,6 @@ ENV PYTHONUNBUFFERED=1 \
     ORIGINAL_AUDIO_VOLUME=0.08
 
 EXPOSE 8080
-VOLUME ["/app/downloads", "/root/.cache"]
+VOLUME ["/app/downloads", "/root/.cache", "/root/.config/douyin-cli"]
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD curl -fsS http://127.0.0.1:8080/api/health || exit 1
 CMD ["videoget"]
