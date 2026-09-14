@@ -24,6 +24,9 @@ func WithSubtitleRoutes(next http.Handler, jobs *download.Manager) http.Handler 
 	mux.HandleFunc("GET /api/jobs/{id}/subtitles", server.getSubtitles)
 	mux.HandleFunc("GET /api/jobs/{id}/subtitles/quality", server.getSubtitleQuality)
 	mux.HandleFunc("PUT /api/jobs/{id}/subtitles", server.saveSubtitles)
+	mux.HandleFunc("POST /api/jobs/{id}/subtitles/retranslate", server.retranslateSubtitles)
+	mux.HandleFunc("POST /api/jobs/{id}/subtitles/regenerate-tts", server.rerenderSubtitles)
+	// Backward-compatible alias used by the first V2 editor build.
 	mux.HandleFunc("POST /api/jobs/{id}/subtitles/rerender", server.rerenderSubtitles)
 	mux.HandleFunc("GET /api/jobs/{id}/media/{kind}", server.media)
 	mux.Handle("/", next)
@@ -72,6 +75,27 @@ func (s *subtitleServer) saveSubtitles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, document)
+}
+
+func (s *subtitleServer) retranslateSubtitles(w http.ResponseWriter, r *http.Request) {
+	var request download.SubtitleRetranslateRequest
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err := decoder.Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	job, err := s.jobs.RetranslateSubtitles(r.PathValue("id"), request)
+	if err != nil {
+		status := http.StatusConflict
+		if strings.Contains(err.Error(), "not found") {
+			status = http.StatusNotFound
+		} else if strings.Contains(err.Error(), "unsupported") || strings.Contains(err.Error(), "too long") || strings.Contains(err.Error(), "too many") {
+			status = http.StatusBadRequest
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, job)
 }
 
 func (s *subtitleServer) rerenderSubtitles(w http.ResponseWriter, r *http.Request) {
