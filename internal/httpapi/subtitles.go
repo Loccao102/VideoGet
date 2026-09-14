@@ -23,6 +23,7 @@ func WithSubtitleRoutes(next http.Handler, jobs *download.Manager) http.Handler 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/jobs/{id}/subtitles", server.getSubtitles)
 	mux.HandleFunc("GET /api/jobs/{id}/subtitles/quality", server.getSubtitleQuality)
+	mux.HandleFunc("GET /api/jobs/{id}/subtitles/context", server.getSubtitleContext)
 	mux.HandleFunc("PUT /api/jobs/{id}/subtitles", server.saveSubtitles)
 	mux.HandleFunc("POST /api/jobs/{id}/subtitles/retranslate", server.retranslateSubtitles)
 	mux.HandleFunc("POST /api/jobs/{id}/subtitles/regenerate-tts", server.rerenderSubtitles)
@@ -48,6 +49,19 @@ func (s *subtitleServer) getSubtitles(w http.ResponseWriter, r *http.Request) {
 
 func (s *subtitleServer) getSubtitleQuality(w http.ResponseWriter, r *http.Request) {
 	document, err := s.jobs.GetSubtitleQuality(r.PathValue("id"))
+	if err != nil {
+		status := http.StatusConflict
+		if strings.Contains(err.Error(), "not found") {
+			status = http.StatusNotFound
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, document)
+}
+
+func (s *subtitleServer) getSubtitleContext(w http.ResponseWriter, r *http.Request) {
+	document, err := s.jobs.GetSubtitleContext(r.PathValue("id"))
 	if err != nil {
 		status := http.StatusConflict
 		if strings.Contains(err.Error(), "not found") {
