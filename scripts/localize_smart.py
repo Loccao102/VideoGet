@@ -4,10 +4,13 @@ import json
 import sys
 from pathlib import Path
 
+import adaptive_tts
 import localize as base
 import localize_fast as fast  # installs fast translation/TTS overrides on base
 import smart_render
 
+fast.synthesize_segments = adaptive_tts.synthesize_segments
+base.synthesize_segments = adaptive_tts.synthesize_segments
 base.render_video = smart_render.render_video
 
 
