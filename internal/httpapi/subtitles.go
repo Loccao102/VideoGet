@@ -22,6 +22,7 @@ func WithSubtitleRoutes(next http.Handler, jobs *download.Manager) http.Handler 
 	server := &subtitleServer{jobs: jobs}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/jobs/{id}/subtitles", server.getSubtitles)
+	mux.HandleFunc("GET /api/jobs/{id}/subtitles/quality", server.getSubtitleQuality)
 	mux.HandleFunc("PUT /api/jobs/{id}/subtitles", server.saveSubtitles)
 	mux.HandleFunc("POST /api/jobs/{id}/subtitles/rerender", server.rerenderSubtitles)
 	mux.HandleFunc("GET /api/jobs/{id}/media/{kind}", server.media)
@@ -31,6 +32,19 @@ func WithSubtitleRoutes(next http.Handler, jobs *download.Manager) http.Handler 
 
 func (s *subtitleServer) getSubtitles(w http.ResponseWriter, r *http.Request) {
 	document, err := s.jobs.GetSubtitles(r.PathValue("id"))
+	if err != nil {
+		status := http.StatusConflict
+		if strings.Contains(err.Error(), "not found") {
+			status = http.StatusNotFound
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, document)
+}
+
+func (s *subtitleServer) getSubtitleQuality(w http.ResponseWriter, r *http.Request) {
+	document, err := s.jobs.GetSubtitleQuality(r.PathValue("id"))
 	if err != nil {
 		status := http.StatusConflict
 		if strings.Contains(err.Error(), "not found") {
