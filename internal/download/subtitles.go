@@ -14,6 +14,8 @@ import (
 
 type SubtitleSegment struct {
 	ID                    int     `json:"id"`
+	SourceSegmentIDs      []int   `json:"sourceSegmentIds,omitempty"`
+	SceneID               int     `json:"sceneId,omitempty"`
 	Start                 float64 `json:"start"`
 	End                   float64 `json:"end"`
 	SourceText            string  `json:"sourceText,omitempty"`
@@ -41,6 +43,8 @@ type SubtitleUpdate struct {
 
 type pipelineSubtitleSegment struct {
 	ID                    int     `json:"id"`
+	SourceSegmentIDs      []int   `json:"sourceSegmentIds,omitempty"`
+	SceneID               int     `json:"sceneId,omitempty"`
 	Start                 float64 `json:"start"`
 	End                   float64 `json:"end"`
 	Text                  string  `json:"text,omitempty"`
@@ -135,6 +139,8 @@ func toSubtitleSegments(items []pipelineSubtitleSegment) []SubtitleSegment {
 	for _, item := range items {
 		out = append(out, SubtitleSegment{
 			ID:                    item.ID,
+			SourceSegmentIDs:      append([]int(nil), item.SourceSegmentIDs...),
+			SceneID:               item.SceneID,
 			Start:                 item.Start,
 			End:                   item.End,
 			SourceText:            item.Text,
@@ -234,9 +240,22 @@ func (m *Manager) SaveSubtitles(id string, update SubtitleUpdate) (SubtitleDocum
 		if confidence <= 0 {
 			confidence = previous.TranslationConfidence
 		}
+		sourceSegmentIDs := append([]int(nil), item.SourceSegmentIDs...)
+		if len(sourceSegmentIDs) == 0 {
+			sourceSegmentIDs = append([]int(nil), previous.SourceSegmentIDs...)
+		}
+		if len(sourceSegmentIDs) == 0 {
+			sourceSegmentIDs = []int{item.ID}
+		}
+		sceneID := item.SceneID
+		if sceneID <= 0 {
+			sceneID = previous.SceneID
+		}
 
 		pipeline = append(pipeline, pipelineSubtitleSegment{
 			ID:                    item.ID,
+			SourceSegmentIDs:      sourceSegmentIDs,
+			SceneID:               sceneID,
 			Start:                 item.Start,
 			End:                   item.End,
 			Text:                  source,
@@ -250,7 +269,7 @@ func (m *Manager) SaveSubtitles(id string, update SubtitleUpdate) (SubtitleDocum
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
-	draft := subtitleDraft{Version: 2, JobID: job.ID, EditedAt: now, Segments: pipeline}
+	draft := subtitleDraft{Version: 4, JobID: job.ID, EditedAt: now, Segments: pipeline}
 	if err := writeJSONAtomic(draftPath, draft); err != nil {
 		return SubtitleDocument{}, err
 	}
@@ -259,7 +278,7 @@ func (m *Manager) SaveSubtitles(id string, update SubtitleUpdate) (SubtitleDocum
 	}
 
 	// Keep the persistent worker's translation cache aligned with manual edits.
-	// This also preserves contextual utterance/speaker metadata after a restart.
+	// This also preserves contextual utterance/scene/speaker metadata after a restart.
 	if data, readErr := os.ReadFile(translatedPath); readErr == nil {
 		var payload map[string]any
 		if json.Unmarshal(data, &payload) == nil {
