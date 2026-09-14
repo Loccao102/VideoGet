@@ -1,10 +1,25 @@
 import os
 import sys
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+# The translator module imports localize.py for shared HTTP/log helpers. CI only
+# needs to test pure translation metadata here, not load Whisper/Edge runtime.
+faster_whisper = types.ModuleType("faster_whisper")
+faster_whisper.WhisperModel = object
+sys.modules.setdefault("faster_whisper", faster_whisper)
+
+pydub = types.ModuleType("pydub")
+pydub.AudioSegment = object
+sys.modules.setdefault("pydub", pydub)
+
+edge_tts = types.ModuleType("edge_tts")
+edge_tts.Communicate = object
+sys.modules.setdefault("edge_tts", edge_tts)
 
 import utterance_translate as v21
 import utterance_translate_v22 as v22
