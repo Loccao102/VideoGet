@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 
 import adaptive_tts
+import localization_v2_quality as quality
 import localize as base
 import smart_render
 
@@ -79,6 +80,15 @@ def main() -> None:
     edit["renderedAt"] = rendered_at
     edit_path.write_text(json.dumps(edit, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    quality_report = quality.write_quality_artifacts(output_dir, stem, segments)
+    qa = quality_report["qa"]
+    qa_summary = {
+        "status": qa.get("status", "pass"),
+        "errors": qa.get("errors", 0),
+        "warnings": qa.get("warnings", 0),
+        "segments": qa.get("segments", len(segments)),
+    }
+
     output_video = output_dir / f"{stem}.vi-dubbed.mp4"
     stage = time.perf_counter()
     smart_render.render_video(input_path, voice_track, vi_srt, output_video)
@@ -101,6 +111,10 @@ def main() -> None:
             "subtitleDraftPending": False,
             "subtitleEditFile": str(edit_path),
             "lastRerenderAt": rendered_at,
+            "translationQA": qa_summary,
+            "translationQAFile": quality_report["qaFile"],
+            "semanticBlocks": quality_report["semanticBlocks"],
+            "semanticBlocksFile": quality_report["semanticBlocksFile"],
         }
     )
     metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -112,6 +126,10 @@ def main() -> None:
         "outputVideo": str(output_video),
         "detectedLanguage": str(metadata.get("detectedLanguage", "")),
         "segments": len(segments),
+        "translationQA": qa_summary,
+        "translationQAFile": quality_report["qaFile"],
+        "semanticBlocks": quality_report["semanticBlocks"],
+        "semanticBlocksFile": quality_report["semanticBlocksFile"],
         "timings": {
             "tts": tts_seconds,
             "render": render_seconds,
