@@ -162,20 +162,61 @@ def apply_overrides(context: dict, overrides: dict | None = None) -> dict:
         "characters": approved_characters,
         "relationships": approved_relationships,
         "terms": approved_terms,
+        "sourceCorrections": [],
         "notes": _clean(approved.get("notes")),
     }
     result["approvedContextLocked"] = bool(approved_characters or approved_relationships or approved_terms or _clean(approved.get("notes")))
     return result
 
 
+def attach_source_corrections(context: dict, corrections: list[dict]) -> dict:
+    """Attach source corrections explicitly approved in the subtitle draft."""
+    result = dict(context or {})
+    approved = result.get("approvedFacts")
+    approved = dict(approved) if isinstance(approved, dict) else {}
+    normalized: list[dict] = []
+    seen: set[tuple[int, ...]] = set()
+    for raw in corrections or []:
+        if not isinstance(raw, dict):
+            continue
+        source_ids = []
+        for value in raw.get("sourceIds") or []:
+            try:
+                source_ids.append(int(value))
+            except (TypeError, ValueError):
+                continue
+        corrected = _clean(raw.get("correctedText"))
+        if not source_ids or not corrected:
+            continue
+        key = tuple(source_ids)
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(
+            {
+                "sourceIds": source_ids,
+                "originalText": _clean(raw.get("originalText")),
+                "correctedText": corrected,
+                "locked": True,
+                "approvedByUser": True,
+            }
+        )
+    approved["sourceCorrections"] = normalized
+    result["approvedFacts"] = approved
+    if normalized:
+        result["approvedContextLocked"] = True
+    return result
+
+
 def compact_approved_facts(context: dict) -> dict:
     approved = context.get("approvedFacts") if isinstance(context, dict) else None
     if not isinstance(approved, dict):
-        return {"characters": [], "relationships": [], "terms": [], "notes": ""}
+        return {"characters": [], "relationships": [], "terms": [], "sourceCorrections": [], "notes": ""}
     return {
         "characters": approved.get("characters") or [],
         "relationships": approved.get("relationships") or [],
         "terms": approved.get("terms") or [],
+        "sourceCorrections": approved.get("sourceCorrections") or [],
         "notes": _clean(approved.get("notes")),
     }
 
