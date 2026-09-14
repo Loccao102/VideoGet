@@ -35,6 +35,7 @@ jobs:
           scripts/localize_worker_smart.py
           scripts/localize_worker_smart_v22.py
           scripts/adaptive_tts.py
+          scripts/tts_preview.py
           scripts/rerender_subtitles.py
           scripts/retranslate_subtitles.py
           scripts/retranslate_subtitles_v22.py
