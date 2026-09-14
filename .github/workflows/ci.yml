@@ -32,5 +32,7 @@ jobs:
           scripts/smart_render.py
           scripts/localize_smart.py
           scripts/localize_worker_smart.py
+          scripts/adaptive_tts.py
+          scripts/rerender_subtitles.py
       - name: Validate Dockerfile
         run: docker buildx build --check .
