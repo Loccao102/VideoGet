@@ -111,6 +111,33 @@ def _approved_source_corrections(existing_segments: list[dict] | None) -> list[d
     return out
 
 
+def _preserve_approved_source_corrections(
+    translated: list[dict], corrections: list[dict]
+) -> list[dict]:
+    correction_sets = [
+        (set(int(value) for value in item.get("sourceIds") or []), item)
+        for item in corrections
+        if item.get("sourceIds") and item.get("correctedText")
+    ]
+    out: list[dict] = []
+    for raw in translated:
+        item = dict(raw)
+        raw_ids = item.get("sourceSegmentIds") or [item.get("id")]
+        ids: set[int] = set()
+        for value in raw_ids:
+            try:
+                ids.add(int(value))
+            except (TypeError, ValueError):
+                continue
+        for correction_ids, correction in correction_sets:
+            if ids and correction_ids and (ids == correction_ids or correction_ids.issubset(ids)):
+                item["sourceCorrected"] = str(correction.get("correctedText") or "").strip()
+                item["sourceCorrectionApproved"] = True
+                break
+        out.append(item)
+    return out
+
+
 def translate_contextual(*args, **kwargs):
     corrections = _approved_source_corrections(kwargs.get("existing_segments"))
     token = _runtime_source_corrections.set(corrections)
@@ -118,6 +145,7 @@ def translate_contextual(*args, **kwargs):
         translated, story = v22.translate_contextual(*args, **kwargs)
     finally:
         _runtime_source_corrections.reset(token)
+    translated = _preserve_approved_source_corrections(translated, corrections)
     translated = context_overrides.apply_voice_hints(translated, story)
     story["translationPromptVersion"] = TRANSLATION_PROMPT_VERSION
     story["approvedOverridesFingerprint"] = context_overrides.overrides_fingerprint()
