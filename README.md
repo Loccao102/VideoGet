@@ -28,10 +28,14 @@ chủ đề tiếng Việt
 
 ### Download
 - Mỗi job có thư mục riêng.
-- Douyin download bằng `yt-dlp` trước; nếu extractor bị anti-bot/API chặn thì fallback đọc trang video/share page để tìm media URL và tải trực tiếp.
-- `DOUYIN_COOKIE` được chuyển tạm sang Netscape cookie file cho `yt-dlp`, không ghi cookie thật vào repo.
+- **Douyin không dùng `douyin-cli` và cũng không dùng `yt-dlp` trong nhánh tải.**
+- Douyin resolve `aweme_id`, request `https://www.iesdouyin.com/share/video/{id}/` bằng iPhone User-Agent, parse `window._ROUTER_DATA -> videoInfoRes.item_list[0]`, rồi tải trực tiếp `video.bit_rate` / `video.play_addr`.
+- Nếu chỉ có internal video URI, VideoGet tự dựng `aweme.snssdk.com/aweme/v1/play/` theo 1080p -> 720p -> 540p -> default. Có thể ưu tiên `default` bằng `DOUYIN_PREFER_ORIGINAL=true`.
+- Raw `<video src>` / media URL trong HTML chỉ là fallback cuối cùng khi cấu trúc `_ROUTER_DATA` thay đổi.
 - Bilibili download bằng `yt-dlp`, có nhiều format fallback, retry/backoff và kiểm tra audio bằng `ffprobe`.
 - `DOWNLOAD_CONCURRENCY` giới hạn số download chạy đồng thời.
+
+> Lý do tách riêng Douyin: web detail API `www.douyin.com/aweme/v1/web/aweme/detail/` hiện có thể bị anti-bot trả response rỗng dù HTTP 200. Share page `iesdouyin.com` SSR là đường server-side chính; không phụ thuộc X-Bogus hay một Douyin CLI khác.
 
 ### Localization tối ưu hiệu năng
 - `faster-whisper` tạo transcript/subtitle gốc.
@@ -140,12 +144,12 @@ Mặc định Docker bật:
 
 ```env
 LOCALIZE_PERSISTENT_WORKER=true
-LOCALIZE_WORKER_SCRIPT=/app/scripts/localize_worker.py
+LOCALIZE_WORKER_SCRIPT=/app/scripts/localize_worker_smart.py
 LOCALIZE_WORKER_FALLBACK=true
 LOCALIZE_WORKER_PREWARM=true
 LOCALIZE_WORKER_START_TIMEOUT_SEC=600
 
-WHISPER_MODEL=base
+WHISPER_MODEL=small
 WHISPER_DEVICE=cpu
 WHISPER_COMPUTE_TYPE=int8
 WHISPER_LANGUAGE=zh
@@ -154,7 +158,7 @@ WHISPER_CPU_THREADS=8
 WHISPER_NUM_WORKERS=1
 ```
 
-Nếu worker gặp lỗi hạ tầng, `LOCALIZE_WORKER_FALLBACK=true` cho phép VideoGet quay về `localize_fast.py` one-shot. Lỗi nội dung của chính job không bị chạy lại vô ích bằng fallback.
+Nếu worker gặp lỗi hạ tầng, `LOCALIZE_WORKER_FALLBACK=true` cho phép VideoGet quay về one-shot processor. Lỗi nội dung của chính job không bị chạy lại vô ích bằng fallback.
 
 ### Cookies
 
@@ -165,7 +169,20 @@ BILIBILI_COOKIE=
 
 Cookie phải lấy từ chính browser session mà bạn có quyền sử dụng. Không commit cookie thật lên GitHub.
 
-Douyin không còn yêu cầu `douyin-cli`. Cookie chỉ được dùng để tăng khả năng resolve metadata/media khi Douyin áp dụng anti-bot; discovery public vẫn có thể chạy khi cookie trống.
+Douyin không còn yêu cầu `douyin-cli` hoặc `yt-dlp`. Cookie là optional cho share-page resolver nhưng có thể tăng độ ổn định khi Douyin áp dụng risk-control.
+
+Các biến Douyin chính:
+
+```env
+DOUYIN_MOBILE_USER_AGENT=Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) ...
+DOUYIN_RESOLVE_TIMEOUT_SEC=18
+DOUYIN_PAGE_TIMEOUT_SEC=25
+DOUYIN_MEDIA_TIMEOUT_SEC=120
+DOUYIN_MEDIA_CANDIDATES=12
+DOUYIN_PREFER_ORIGINAL=false
+```
+
+`DOUYIN_PREFER_ORIGINAL=false` ưu tiên bitrate URL/1080p hợp lý hơn cho pipeline affiliate. Bật `true` nếu muốn thử stream `ratio=default` trước, có thể lớn hơn đáng kể.
 
 ### Start
 
@@ -306,17 +323,20 @@ downloads/
 | `JOB_DB_PATH` | `/app/downloads/videoget.db` | SQLite job store |
 | `DOWNLOAD_CONCURRENCY` | `3` | download đồng thời |
 | `JOB_TIMEOUT_MINUTES` | `180` | timeout toàn job |
-| `DOUYIN_COOKIE` | trống | session Douyin, optional nhưng nên có cho download |
+| `DOUYIN_COOKIE` | trống | session Douyin, optional |
 | `DOUYIN_SEARCH_TIMEOUT_SEC` | `20` | timeout discovery Douyin public index |
-| `DOUYIN_DOWNLOAD_ATTEMPTS` | `2` | số chiến lược format yt-dlp cho Douyin |
-| `DOUYIN_PAGE_FALLBACK` | `true` | fallback resolve media từ trang Douyin/share |
+| `DOUYIN_RESOLVE_TIMEOUT_SEC` | `18` | timeout resolve short link / aweme id |
+| `DOUYIN_PAGE_TIMEOUT_SEC` | `25` | timeout lấy iesdouyin share page |
+| `DOUYIN_MEDIA_TIMEOUT_SEC` | `120` | timeout tải media trực tiếp |
+| `DOUYIN_MEDIA_CANDIDATES` | `12` | tối đa media candidate thử cho một video |
+| `DOUYIN_PREFER_ORIGINAL` | `false` | ưu tiên ratio=default trước 1080p |
 | `BILIBILI_COOKIE` | trống | session Bilibili |
 | `KEYWORD_EXPANDER` | `ollama` | keyword expansion |
 | `AUTO_LOCALIZE` | `true` | tự Việt hóa sau download |
 | `LOCALIZE_CONCURRENCY` | `1` | số localization chạy đồng thời |
 | `LOCALIZE_PERSISTENT_WORKER` | `true` | giữ Whisper model trong RAM |
 | `LOCALIZE_WORKER_PREWARM` | `true` | warm model lúc app start |
-| `WHISPER_MODEL` | `base` | faster-whisper model |
+| `WHISPER_MODEL` | `small` | faster-whisper model |
 | `WHISPER_LANGUAGE` | `zh` | ngôn ngữ nguồn ưu tiên |
 | `WHISPER_BEAM_SIZE` | `1` | decode nhanh trên CPU |
 | `WHISPER_CPU_THREADS` | `8` | CPU threads cho CTranslate2 |
@@ -342,9 +362,10 @@ Go API
    |
    +-- Source adapters
    |     +-- Douyin search -> public web index
-   |     +-- Douyin download -> yt-dlp -> page/share media fallback
+   |     +-- Douyin download -> iesdouyin _ROUTER_DATA -> direct CDN/play URL
    |     +-- Bilibili search -> bili CLI
    |     +-- Bilibili download -> yt-dlp
+   |     +-- Other public sources -> existing public downloader
    |
    +-- Ranking
    |     +-- dedupe / filters / scores
@@ -370,10 +391,10 @@ Go API
 2. **Media Library**: preview original/final, transcript, subtitle, timing và re-render.
 3. **Affiliate Analyzer**: cluster nhiều video thành sản phẩm/ngách, phân tích pain point, hook, selling point và độ phù hợp affiliate Việt Nam.
 4. **Render acceleration**: tùy phần cứng có thể thêm NVENC/Quick Sync profile thay cho `libx264` CPU.
-5. Advanced OCR/inpainting chỉ bật khi cần xử lý text nguồn nằm rải rác trong frame.
+5. Nếu `iesdouyin _ROUTER_DATA` bị loại bỏ trong tương lai, thêm browser-network-interception fallback riêng cho Douyin thay vì làm browser trở thành dependency mặc định.
 
 ## Third-party & sử dụng nội dung
 
-VideoGet tích hợp/call `bilibili-cli`, `yt-dlp`, `faster-whisper`, `edge-tts`, FFmpeg, Ollama và SQLite. Douyin không còn dùng CLI riêng.
+VideoGet tích hợp/call `bilibili-cli`, `yt-dlp` (cho các nhánh không phải Douyin), `faster-whisper`, `edge-tts`, FFmpeg, Ollama và SQLite. Douyin không còn dùng CLI riêng hoặc yt-dlp.
 
 Hãy xem kỹ license và điều khoản của từng nền tảng/công cụ trước khi redistribute hoặc dùng thương mại. Chỉ tải và biến đổi nội dung bạn có quyền sử dụng; translation, dubbing hoặc xóa watermark không tự tạo quyền tái sử dụng nội dung.
