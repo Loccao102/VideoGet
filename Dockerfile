@@ -1,6 +1,3 @@
-FROM rust:1.88-bookworm AS douyin-builder
-RUN cargo install douyin-cli --locked --root /opt/douyin
-
 FROM golang:1.26-bookworm AS go-builder
 WORKDIR /src
 RUN go install github.com/tamnd/bilibili-cli/cmd/bili@v0.3.0
@@ -27,25 +24,27 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     fonts-noto-cjk \
     fonts-noto-color-emoji
 
+# Playwright is installed as a CDP client only. Chromium/Edge runs on the Windows host
+# so VideoGet can use the real browser session without copying Douyin cookies/tokens.
 RUN pip install --no-cache-dir \
     yt-dlp==2026.8.19 \
+    playwright==1.55.0 \
     faster-whisper \
     edge-tts==7.2.8 \
     pydub \
     opencv-python-headless
 
-COPY --from=douyin-builder /opt/douyin/bin/douyin /usr/local/bin/douyin-real
 COPY --from=go-builder /go/bin/bili /usr/local/bin/bili
 COPY --from=go-builder /out/videoget /usr/local/bin/videoget
 COPY scripts /app/scripts
-# Windows checkouts can rewrite executable Python files to CRLF. Normalize every
-# script inside the Linux image before using shebang-based launchers.
+# Windows checkouts can rewrite Python files to CRLF. Normalize scripts before
+# shebang execution; the Douyin browser bridge replaces douyin-cli completely.
 RUN find /app/scripts -type f -name '*.py' -exec sed -i 's/\r$//' {} + \
-    && chmod +x /app/scripts/douyin_wrapper.py \
+    && chmod +x /app/scripts/douyin_browser_bridge.py /app/scripts/douyin_wrapper.py \
     && ln -sf /app/scripts/douyin_wrapper.py /usr/local/bin/douyin
 
 WORKDIR /app
-RUN mkdir -p /app/downloads /root/.cache /root/.config/douyin-cli
+RUN mkdir -p /app/downloads /root/.cache
 
 ENV PYTHONUNBUFFERED=1 \
     ADDR=:8080 \
@@ -53,11 +52,15 @@ ENV PYTHONUNBUFFERED=1 \
     JOB_DB_PATH=/app/downloads/videoget.db \
     DOWNLOAD_CONCURRENCY=3 \
     JOB_TIMEOUT_MINUTES=180 \
-    DOUYIN_MODE=auto \
+    DOUYIN_MODE=browser \
     DOUYIN_BIN=douyin \
-    DOUYIN_REAL_BIN=/usr/local/bin/douyin-real \
-    DOUYIN_DOWNLOAD_USE_ENV_COOKIE=false \
-    DOUYIN_GUEST_CLI_TIMEOUT_SEC=18 \
+    DOUYIN_BROWSER_BRIDGE=/app/scripts/douyin_browser_bridge.py \
+    DOUYIN_CDP_URL=http://host.docker.internal:9222 \
+    DOUYIN_BROWSER_CONNECT_TIMEOUT_SEC=8 \
+    DOUYIN_BROWSER_SEARCH_TIMEOUT_SEC=75 \
+    DOUYIN_BROWSER_TIMEOUT_SEC=45 \
+    DOUYIN_BROWSER_SCROLLS=6 \
+    DOUYIN_BROWSER_DOWNLOAD_TIMEOUT_SEC=120 \
     DOUYIN_GUEST_TIMEOUT_SEC=20 \
     BILIBILI_BIN=bili \
     BILIBILI_SEARCH_DELAY_MS=1200 \
@@ -117,6 +120,6 @@ ENV PYTHONUNBUFFERED=1 \
     ORIGINAL_AUDIO_VOLUME=0.08
 
 EXPOSE 8080
-VOLUME ["/app/downloads", "/root/.cache", "/root/.config/douyin-cli"]
+VOLUME ["/app/downloads", "/root/.cache"]
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD curl -fsS http://127.0.0.1:8080/api/health || exit 1
 CMD ["videoget"]
