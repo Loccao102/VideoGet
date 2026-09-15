@@ -30,8 +30,12 @@ func WithSubtitleRoutes(next http.Handler, jobs *download.Manager) http.Handler 
 	mux.HandleFunc("PUT /api/jobs/{id}/subtitles", server.saveSubtitles)
 	mux.HandleFunc("POST /api/jobs/{id}/subtitles/retranslate", server.retranslateSubtitles)
 	mux.HandleFunc("POST /api/jobs/{id}/subtitles/tts-preview", server.previewSubtitleTTS)
+	// Explicitly separate output actions: source-audio subtitle render never
+	// invokes TTS, while regenerate-tts is the opt-in dubbing path.
+	mux.HandleFunc("POST /api/jobs/{id}/subtitles/render", server.renderSubtitlesOnly)
 	mux.HandleFunc("POST /api/jobs/{id}/subtitles/regenerate-tts", server.rerenderSubtitles)
-	// Backward-compatible alias used by the first V2 editor build.
+	// Backward-compatible alias used by the first V2 editor build. It remains the
+	// TTS path; new UI should use /render when source audio must be preserved.
 	mux.HandleFunc("POST /api/jobs/{id}/subtitles/rerender", server.rerenderSubtitles)
 	mux.HandleFunc("GET /api/jobs/{id}/media/{kind}", server.media)
 	mux.Handle("/", next)
@@ -174,7 +178,30 @@ func (s *subtitleServer) previewSubtitleTTS(w http.ResponseWriter, r *http.Reque
 	_, _ = w.Write(preview.Audio)
 }
 
+func (s *subtitleServer) renderSubtitlesOnly(w http.ResponseWriter, r *http.Request) {
+	job, err := s.jobs.RenderSubtitlesOnly(r.PathValue("id"))
+	if err != nil {
+		status := http.StatusConflict
+		if strings.Contains(err.Error(), "not found") {
+			status = http.StatusNotFound
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, job)
+}
+
 func (s *subtitleServer) rerenderSubtitles(w http.ResponseWriter, r *http.Request) {
+	// This endpoint is explicit TTS opt-in. Persist that choice so the dashboard,
+	// retries and subsequent editor actions reflect what the user selected.
+	if _, err := s.jobs.SetLocalizationMode(r.PathValue("id"), "subtitles_tts"); err != nil {
+		status := http.StatusConflict
+		if strings.Contains(err.Error(), "not found") {
+			status = http.StatusNotFound
+		}
+		writeError(w, status, err.Error())
+		return
+	}
 	job, err := s.jobs.RerenderSubtitles(r.PathValue("id"))
 	if err != nil {
 		status := http.StatusConflict
