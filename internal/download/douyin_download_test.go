@@ -1,10 +1,63 @@
 package download
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
+
+func TestDouyinRouterDataCandidates(t *testing.T) {
+	document := `<html><body><script>
+window._ROUTER_DATA = {
+  "loaderData": {
+    "video_(7664188112177079482)/page": {
+      "videoInfoRes": {
+        "item_list": [{
+          "aweme_id": "7664188112177079482",
+          "video": {
+            "play_addr": {
+              "uri": "v0200fg10000example",
+              "url_list": ["https://v3-web.douyinvod.com/base/playwm/?mime_type=video_mp4"]
+            },
+            "bit_rate": [
+              {"bit_rate": 1200000, "play_addr": {"url_list": ["https://v3-web.douyinvod.com/low/video.mp4"]}},
+              {"bit_rate": 3600000, "play_addr": {"url_list": ["https://v3-web.douyinvod.com/high/video.mp4"]}}
+            ]
+          }
+        }]
+      }
+    }
+  }
+};
+</script></body></html>`
+
+	candidates, err := douyinRouterDataCandidates(document)
+	if err != nil {
+		t.Fatalf("douyinRouterDataCandidates: %v", err)
+	}
+	if len(candidates) < 7 {
+		t.Fatalf("len(candidates) = %d, want at least 7: %#v", len(candidates), candidates)
+	}
+	if candidates[0] != "https://v3-web.douyinvod.com/high/video.mp4" {
+		t.Fatalf("highest bitrate candidate = %q", candidates[0])
+	}
+	if candidates[1] != "https://v3-web.douyinvod.com/low/video.mp4" {
+		t.Fatalf("second candidate = %q", candidates[1])
+	}
+	if candidates[2] != "https://v3-web.douyinvod.com/base/play/?mime_type=video_mp4" {
+		t.Fatalf("playwm was not normalized: %q", candidates[2])
+	}
+	if !strings.Contains(candidates[3], "aweme.snssdk.com/aweme/v1/play/") || !strings.Contains(candidates[3], "ratio=1080p") {
+		t.Fatalf("missing 1080p URI fallback: %q", candidates[3])
+	}
+}
+
+func TestDouyinRouterDataEmptyItemReportsUnavailable(t *testing.T) {
+	document := `<script>window._ROUTER_DATA={"loaderData":{"x":{"videoInfoRes":{"item_list":[],"filter_list":[{"detail_msg":"作品已删除"}]}}}};</script>`
+	_, err := douyinRouterDataCandidates(document)
+	if err == nil || !strings.Contains(err.Error(), "作品已删除") {
+		t.Fatalf("error = %v, want unavailable detail", err)
+	}
+}
 
 func TestDouyinMediaCandidates(t *testing.T) {
 	document := `<html><body>
@@ -25,40 +78,24 @@ func TestDouyinMediaCandidates(t *testing.T) {
 	}
 }
 
-func TestWriteDouyinCookieFile(t *testing.T) {
-	path, cleanup, err := writeDouyinCookieFile("ttwid=abc123; sessionid=xyz=456; malformed; s_v_web_id=verify_1")
-	if err != nil {
-		t.Fatalf("writeDouyinCookieFile: %v", err)
+func TestExtractDouyinDownloadVideoID(t *testing.T) {
+	cases := map[string]string{
+		"https://www.douyin.com/video/7664188112177079482":                         "7664188112177079482",
+		"https://www.iesdouyin.com/share/video/7664188112177079482/":               "7664188112177079482",
+		"https://www.douyin.com/user/foo?modal_id=7664188112177079482&showTab=post": "7664188112177079482",
 	}
-	defer cleanup()
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read cookie file: %v", err)
-	}
-	text := string(data)
-	for _, expected := range []string{
-		"# Netscape HTTP Cookie File",
-		".douyin.com\tTRUE\t/\tTRUE\t0\tttwid\tabc123",
-		".douyin.com\tTRUE\t/\tTRUE\t0\tsessionid\txyz=456",
-		".douyin.com\tTRUE\t/\tTRUE\t0\ts_v_web_id\tverify_1",
-	} {
-		if !strings.Contains(text, expected) {
-			t.Fatalf("cookie file missing %q:\n%s", expected, text)
+	for input, want := range cases {
+		if got := extractDouyinDownloadVideoID(input); got != want {
+			t.Fatalf("extractDouyinDownloadVideoID(%q) = %q, want %q", input, got, want)
 		}
-	}
-	if strings.Contains(text, "malformed") {
-		t.Fatalf("malformed cookie token should be ignored:\n%s", text)
 	}
 }
 
-func TestWriteDouyinCookieFileEmpty(t *testing.T) {
-	path, cleanup, err := writeDouyinCookieFile("")
-	defer cleanup()
-	if err != nil {
-		t.Fatalf("empty cookie returned error: %v", err)
-	}
-	if path != "" {
-		t.Fatalf("path = %q, want empty", path)
+func TestExtractDouyinJSONObjectHandlesNestedStrings(t *testing.T) {
+	document := `prefix {"a":{"text":"brace } inside string","escaped":"quote \\" ok"},"b":1}; suffix`
+	start := strings.Index(document, "{")
+	got := extractDouyinJSONObject(document, start)
+	if !strings.HasSuffix(got, `"b":1}`) {
+		t.Fatalf("unexpected JSON object: %q", got)
 	}
 }
