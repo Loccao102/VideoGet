@@ -12,56 +12,136 @@ import (
 	"time"
 )
 
-// douyinResumableDirect keeps the current CLI-free/yt-dlp-free Douyin resolver
-// but hardens the media transfer. Douyin CDN connections can close early; this
-// path retains the .part file and resumes with HTTP Range instead of restarting.
+// douyinResumableDirect keeps the Douyin path CLI-free and yt-dlp-free.
+// Resolver order:
+//   1. iesdouyin share page -> window._ROUTER_DATA
+//   2. www.douyin.com/video/{id} -> embedded self.__pace_f / HTML media URLs
+//
+// Media transfer uses a Range-resumable downloader so CDN connections can
+// reconnect without discarding already downloaded bytes.
 func (m *Manager) douyinResumableDirect(ctx context.Context, rawURL, outputDir string) (string, error) {
 	videoID, err := resolveDouyinVideoID(ctx, rawURL)
 	if err != nil {
 		return "", err
 	}
 
-	shareURL := "https://www.iesdouyin.com/share/video/" + videoID + "/"
-	document, err := fetchDouyinSharePage(ctx, shareURL)
-	if err != nil {
-		return "", fmt.Errorf("load Douyin share page: %w", err)
-	}
-
-	candidates, parseErr := douyinRouterDataCandidates(document)
-	for _, candidate := range douyinMediaCandidates(document) {
-		candidates = appendUniqueDouyinURL(candidates, candidate)
-	}
-	if len(candidates) == 0 {
-		if parseErr != nil {
-			return "", fmt.Errorf("Douyin _ROUTER_DATA parse failed: %w", parseErr)
-		}
-		return "", fmt.Errorf("Douyin share page contained no playable video URL")
-	}
-
 	cookie := strings.TrimSpace(os.Getenv("DOUYIN_COOKIE"))
+	shareURL := "https://www.iesdouyin.com/share/video/" + videoID + "/"
 	var failures []string
-	maxCandidates := envPositiveInt("DOUYIN_MEDIA_CANDIDATES", 12)
-	if maxCandidates > len(candidates) {
-		maxCandidates = len(candidates)
+
+	if document, shareErr := fetchDouyinSharePage(ctx, shareURL); shareErr != nil {
+		failures = append(failures, fmt.Sprintf("share resolver: %v", shareErr))
+	} else {
+		candidates, parseErr := douyinRouterDataCandidates(document)
+		for _, candidate := range douyinMediaCandidates(document) {
+			candidates = appendUniqueDouyinURL(candidates, candidate)
+		}
+		if len(candidates) == 0 {
+			if parseErr != nil {
+				failures = append(failures, fmt.Sprintf("share resolver: %v", parseErr))
+			} else {
+				failures = append(failures, "share resolver: no playable media URL")
+			}
+		} else {
+			if output, candidateFailures := tryDouyinCandidates(ctx, candidates, videoID, "", shareURL, outputDir, cookie); output != "" {
+				return output, nil
+			} else {
+				failures = append(failures, candidateFailures...)
+			}
+		}
 	}
-	for index, mediaURL := range candidates[:maxCandidates] {
-		output := filepath.Join(outputDir, fmt.Sprintf("douyin-%s-%02d.mp4", videoID, index+1))
-		if err := downloadDouyinMediaResumable(ctx, mediaURL, shareURL, output, cookie); err != nil {
-			failures = append(failures, fmt.Sprintf("candidate %d: %v", index+1, err))
-			continue
+
+	if envDownloadBool("DOUYIN_DESKTOP_FALLBACK", true) {
+		desktopURL := "https://www.douyin.com/video/" + videoID
+		document, desktopErr := fetchDouyinDesktopVideoPage(ctx, desktopURL)
+		if desktopErr != nil {
+			failures = append(failures, fmt.Sprintf("desktop resolver: %v", desktopErr))
+		} else {
+			candidates := douyinMediaCandidates(document)
+			if len(candidates) == 0 {
+				failures = append(failures, "desktop resolver: self.__pace_f/HTML contained no playable media URL")
+			} else if output, candidateFailures := tryDouyinCandidates(ctx, candidates, videoID, "desktop", desktopURL, outputDir, cookie); output != "" {
+				return output, nil
+			} else {
+				failures = append(failures, candidateFailures...)
+			}
 		}
-		if !hasAudioStream(output) {
-			_ = os.Remove(output)
-			failures = append(failures, fmt.Sprintf("candidate %d: downloaded media has no audio", index+1))
-			continue
-		}
-		return output, nil
 	}
 
 	if len(failures) == 0 {
 		return "", fmt.Errorf("Douyin download returned no usable media")
 	}
-	return "", fmt.Errorf("Douyin resumable download failed: %s", strings.Join(failures, " | "))
+	return "", fmt.Errorf("Douyin download failed: %s", strings.Join(failures, " | "))
+}
+
+func tryDouyinCandidates(ctx context.Context, candidates []string, videoID, stage, referer, outputDir, cookie string) (string, []string) {
+	maxCandidates := envPositiveInt("DOUYIN_MEDIA_CANDIDATES", 12)
+	if maxCandidates > len(candidates) {
+		maxCandidates = len(candidates)
+	}
+
+	failures := make([]string, 0, maxCandidates)
+	for index, mediaURL := range candidates[:maxCandidates] {
+		name := fmt.Sprintf("douyin-%s-%02d.mp4", videoID, index+1)
+		if stage != "" {
+			name = fmt.Sprintf("douyin-%s-%s-%02d.mp4", videoID, stage, index+1)
+		}
+		output := filepath.Join(outputDir, name)
+		if err := downloadDouyinMediaResumable(ctx, mediaURL, referer, output, cookie); err != nil {
+			failures = append(failures, fmt.Sprintf("%s candidate %d: %v", douyinStageLabel(stage), index+1, err))
+			continue
+		}
+		if !hasAudioStream(output) {
+			_ = os.Remove(output)
+			failures = append(failures, fmt.Sprintf("%s candidate %d: downloaded media has no audio", douyinStageLabel(stage), index+1))
+			continue
+		}
+		return output, failures
+	}
+	return "", failures
+}
+
+func douyinStageLabel(stage string) string {
+	if strings.TrimSpace(stage) == "" {
+		return "share"
+	}
+	return stage
+}
+
+func fetchDouyinDesktopVideoPage(ctx context.Context, pageURL string) (string, error) {
+	requestCtx, cancel := context.WithTimeout(ctx, time.Duration(envPositiveInt("DOUYIN_DESKTOP_TIMEOUT_SEC", 25))*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, pageURL, nil)
+	if err != nil {
+		return "", err
+	}
+	userAgent := strings.TrimSpace(os.Getenv("DOUYIN_USER_AGENT"))
+	if userAgent == "" {
+		userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
+	}
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.6")
+	req.Header.Set("Referer", "https://www.douyin.com/")
+	if cookie := strings.TrimSpace(os.Getenv("DOUYIN_COOKIE")); cookie != "" {
+		req.Header.Set("Cookie", cookie)
+	}
+
+	client := &http.Client{Timeout: time.Duration(envPositiveInt("DOUYIN_DESKTOP_TIMEOUT_SEC", 25)) * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
+		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 12<<20))
+	if err != nil {
+		return "", err
+	}
+	return string(body), nil
 }
 
 func downloadDouyinMediaResumable(ctx context.Context, rawURL, referer, output, cookie string) error {
