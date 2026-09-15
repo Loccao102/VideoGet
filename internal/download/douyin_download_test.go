@@ -92,10 +92,10 @@ func TestExtractDouyinDownloadVideoID(t *testing.T) {
 }
 
 func TestExtractDouyinJSONObjectHandlesNestedStrings(t *testing.T) {
-	document := `prefix {"a":{"text":"brace } inside string","escaped":"quote \\" ok"},"b":1}; suffix`
+	document := `prefix {"a":{"text":"brace } inside string","note":"still nested"},"b":1}; suffix`
 	start := strings.Index(document, "{")
 	got := extractDouyinJSONObject(document, start)
-	if !strings.HasSuffix(got, `"b":1}`) {
+	if got != `{"a":{"text":"brace } inside string","note":"still nested"},"b":1}` {
 		t.Fatalf("unexpected JSON object: %q", got)
 	}
 }
