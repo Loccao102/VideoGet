@@ -30,6 +30,7 @@ jobs:
           scripts/localize_worker.py
           scripts/analyze_layout.py
           scripts/smart_render.py
+          scripts/subtitle_only_render.py
           scripts/localize_smart.py
           scripts/localize_smart_v22.py
           scripts/localize_worker_smart.py
@@ -50,17 +51,19 @@ jobs:
           scripts/localization_v2_quality.py
       - name: Test Localization V2 helpers
         run: python -m unittest discover -s scripts/tests -p 'test_*.py'
-      - name: Validate Subtitle Studio JavaScript
+      - name: Validate web JavaScript
         run: |
           python - <<'PY'
           from pathlib import Path
           import re
-          html = Path('web/subtitles.html').read_text(encoding='utf-8')
-          match = re.search(r'<script>([\s\S]*?)</script>', html)
-          if not match:
-              raise SystemExit('inline Subtitle Studio script not found')
-          Path('/tmp/subtitle-studio.js').write_text(match.group(1), encoding='utf-8')
+          for name in ('index.html', 'subtitles.html'):
+              html = Path('web', name).read_text(encoding='utf-8')
+              match = re.search(r'<script>([\s\S]*?)</script>', html)
+              if not match:
+                  raise SystemExit(f'inline script not found in {name}')
+              Path('/tmp', name + '.js').write_text(match.group(1), encoding='utf-8')
           PY
-          node --check /tmp/subtitle-studio.js
+          node --check /tmp/index.html.js
+          node --check /tmp/subtitles.html.js
       - name: Validate Dockerfile
         run: docker buildx build --check .
