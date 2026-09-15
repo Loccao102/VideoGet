@@ -3,14 +3,13 @@
 
 Search uses the configured environment as-is. Aweme downloads prefer a fresh,
 complete browser cookie from DOUYIN_COOKIE when it contains both UIFID and a
-recognizable login/session key. This matches how douyin-cli documents browser
-Cookie authentication for single-work downloads and avoids silently discarding a
-valid environment cookie in favor of an older persisted CLI session.
+recognizable login/session key. This avoids silently discarding a valid browser
+session in favor of an older persisted CLI login.
 
-If the environment cookie is incomplete, VideoGet falls back to the session saved
-by `douyin auth cookie-login`. If the chosen session is rejected specifically by
-Argus/UIFID checks, the wrapper may try the other user-provided session exactly
-once. It never generates tokens, solves verification, or bypasses risk controls.
+If both the browser cookie and persisted douyin-cli login are rejected specifically
+by Argus/UIFID, VideoGet may try yt-dlp once with the same user-provided browser
+cookie. This is an alternate extractor only: the wrapper never generates tokens,
+solves verification, or bypasses Douyin risk controls.
 
 DOUYIN_UIFID remains an optional compatibility aid for browser exports that truly
 lack UIFID: it may append UIFID to an existing DOUYIN_COOKIE, but never promotes
@@ -21,10 +20,16 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
+import tempfile
 
 DEFAULT_REAL_DOUYIN = "/usr/local/bin/douyin-real"
+DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
+)
 
 
 def truthy(value: str | None) -> bool:
@@ -35,6 +40,14 @@ def task_type(args: list[str]) -> str:
     try:
         index = args.index("-t")
         return args[index + 1].strip().lower()
+    except (ValueError, IndexError):
+        return ""
+
+
+def option_value(args: list[str], name: str) -> str:
+    try:
+        index = args.index(name)
+        return args[index + 1].strip()
     except (ValueError, IndexError):
         return ""
 
@@ -120,6 +133,103 @@ def persisted_env(base: dict[str, str]) -> dict[str, str]:
     return env
 
 
+def write_netscape_cookie_file(cookie: str) -> str:
+    """Write the user-provided Douyin cookie to a short-lived yt-dlp cookie file.
+
+    Using a temporary cookie file avoids exposing the complete session string in
+    the process command line. The file is removed immediately after yt-dlp exits.
+    """
+    handle = tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", prefix="videoget-douyin-", suffix=".cookies", delete=False
+    )
+    try:
+        os.chmod(handle.name, 0o600)
+        handle.write("# Netscape HTTP Cookie File\n")
+        for part in str(cookie or "").split(";"):
+            name, separator, value = part.strip().partition("=")
+            name = name.strip().replace("\t", "").replace("\r", "").replace("\n", "")
+            value = value.strip().replace("\t", "").replace("\r", "").replace("\n", "")
+            if not separator or not name:
+                continue
+            handle.write(f".douyin.com\tTRUE\t/\tTRUE\t0\t{name}\t{value}\n")
+        return handle.name
+    finally:
+        handle.close()
+
+
+def try_ytdlp_fallback(
+    args: list[str], env: dict[str, str], cookie: str
+) -> subprocess.CompletedProcess[str] | None:
+    if not truthy(env.get("DOUYIN_YTDLP_FALLBACK", "true")):
+        return None
+    binary = shutil.which(env.get("DOUYIN_YTDLP_BIN", "yt-dlp"))
+    raw_url = option_value(args, "-u")
+    output_dir = option_value(args, "-p")
+    if not binary or not raw_url or not output_dir or not cookie:
+        return None
+
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    user_agent = env.get("DOUYIN_USER_AGENT", DEFAULT_USER_AGENT).strip() or DEFAULT_USER_AGENT
+    template = str(Path(output_dir) / "douyin-ytdlp [%(id)s].%(ext)s")
+    cookie_file = write_netscape_cookie_file(cookie)
+    try:
+        command = [
+            binary,
+            "--ignore-config",
+            "--no-playlist",
+            "--no-progress",
+            "--no-continue",
+            "--retries", "2",
+            "--fragment-retries", "2",
+            "--socket-timeout", "25",
+            "--merge-output-format", "mp4",
+            "--referer", "https://www.douyin.com/",
+            "--user-agent", user_agent,
+            "--cookies", cookie_file,
+            "--print", "after_move:filepath",
+            "-o", template,
+            raw_url,
+        ]
+        return subprocess.run(
+            command,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            errors="replace",
+        )
+    finally:
+        try:
+            os.remove(cookie_file)
+        except OSError:
+            pass
+
+
+def try_argus_fallback(args: list[str], env: dict[str, str], cookie: str) -> int | None:
+    if not complete_browser_cookie(cookie):
+        return None
+    sys.stderr.write(
+        "VideoGet: both douyin-cli auth sources hit Argus/UIFID; trying yt-dlp once "
+        "with the same authenticated browser cookie.\n"
+    )
+    process = try_ytdlp_fallback(args, env, cookie)
+    if process is None:
+        sys.stderr.write(
+            "VideoGet: yt-dlp fallback is unavailable or disabled; no further automatic "
+            "Douyin download attempts will be made.\n"
+        )
+        return None
+    emit(process)
+    if process.returncode == 0:
+        sys.stderr.write("VideoGet: yt-dlp fallback downloaded the Douyin media successfully.\n")
+        return 0
+    sys.stderr.write(
+        "VideoGet: yt-dlp fallback also failed. The current browser/session context is "
+        "not accepted for this download; refresh the login/session before retrying.\n"
+    )
+    return int(process.returncode)
+
+
 def main() -> int:
     args = sys.argv[1:]
     original_env = os.environ.copy()
@@ -136,7 +246,6 @@ def main() -> int:
         return int(process.returncode)
 
     # A complete browser cookie is the preferred auth source for aweme downloads.
-    # This is also the explicit path when DOUYIN_DOWNLOAD_USE_ENV_COOKIE=true.
     if force_env_cookie or env_cookie_complete:
         if env_cookie_complete:
             sys.stderr.write(
@@ -165,6 +274,9 @@ def main() -> int:
             if second.returncode == 0:
                 return 0
             if argus_uifid_failure(second.stdout, second.stderr):
+                fallback_code = try_argus_fallback(args, original_env, effective_cookie)
+                if fallback_code is not None:
+                    return fallback_code
                 sys.stderr.write(
                     "\nVideoGet: both the browser cookie and persisted CLI session were "
                     "rejected by Argus/UIFID checks. The cookie may be valid in the browser "
@@ -192,6 +304,12 @@ def main() -> int:
             )
         second = run_cli(args, env_with_cookie(original_env, effective_cookie))
         emit(second)
+        if second.returncode == 0:
+            return 0
+        if argus_uifid_failure(second.stdout, second.stderr):
+            fallback_code = try_argus_fallback(args, original_env, effective_cookie)
+            if fallback_code is not None:
+                return fallback_code
         return int(second.returncode)
 
     emit(first)
