@@ -1,6 +1,7 @@
 package source
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"encoding/xml"
@@ -11,9 +12,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -22,39 +21,83 @@ import (
 )
 
 type DouyinProvider struct {
-	binary string
 	mode   string
+	python string
+	bridge string
+	cdpURL string
 }
 
 func NewDouyinProvider() *DouyinProvider {
-	binary := strings.TrimSpace(os.Getenv("DOUYIN_BIN"))
-	if binary == "" {
-		binary = "douyin"
-	}
 	mode := strings.ToLower(strings.TrimSpace(os.Getenv("DOUYIN_MODE")))
-	if mode == "" {
-		mode = "auto"
+	switch mode {
+	case "", "auto", "authenticated":
+		mode = "browser"
+	case "guest":
+		mode = "public"
 	}
-	return &DouyinProvider{binary: binary, mode: mode}
+	python := strings.TrimSpace(os.Getenv("DOUYIN_PYTHON"))
+	if python == "" {
+		python = "python3"
+	}
+	bridge := strings.TrimSpace(os.Getenv("DOUYIN_BROWSER_BRIDGE"))
+	if bridge == "" {
+		bridge = "/app/scripts/douyin_browser_bridge.py"
+	}
+	cdpURL := strings.TrimRight(strings.TrimSpace(os.Getenv("DOUYIN_CDP_URL")), "/")
+	if cdpURL == "" {
+		cdpURL = "http://host.docker.internal:9222"
+	}
+	return &DouyinProvider{
+		mode:   mode,
+		python: python,
+		bridge: bridge,
+		cdpURL: cdpURL,
+	}
 }
 
 func (p *DouyinProvider) Name() string { return "douyin" }
 
 func (p *DouyinProvider) Available() error {
 	switch p.mode {
-	case "auto", "guest":
-		// Guest discovery can fall back to a public search index, so douyin-cli
-		// itself is not a hard requirement for search availability.
+	case "public", "hybrid":
 		return nil
-	case "authenticated":
-		if strings.TrimSpace(os.Getenv("DOUYIN_COOKIE")) == "" {
-			return fmt.Errorf("DOUYIN_MODE=authenticated requires DOUYIN_COOKIE")
-		}
-		_, err := executable(p.binary)
-		return err
+	case "browser":
+		return p.browserAvailable()
 	default:
-		return fmt.Errorf("invalid DOUYIN_MODE %q; use auto, authenticated, or guest", p.mode)
+		return fmt.Errorf("invalid DOUYIN_MODE %q; use browser, hybrid, or public", p.mode)
 	}
+}
+
+func (p *DouyinProvider) browserAvailable() error {
+	if _, err := executable(p.python); err != nil {
+		return err
+	}
+	if info, err := os.Stat(p.bridge); err != nil || info.IsDir() {
+		if err == nil {
+			err = fmt.Errorf("path is a directory")
+		}
+		return fmt.Errorf("Douyin browser bridge unavailable at %s: %w", p.bridge, err)
+	}
+
+	endpoint := p.cdpURL + "/json/version"
+	client := &http.Client{Timeout: envSeconds("DOUYIN_BROWSER_CONNECT_TIMEOUT_SEC", 3)}
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf(
+			"Douyin browser CDP is not reachable at %s; run scripts/start_douyin_browser.ps1 on Windows and keep that browser open: %w",
+			p.cdpURL,
+			err,
+		)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("Douyin browser CDP returned HTTP %d at %s", resp.StatusCode, endpoint)
+	}
+	return nil
 }
 
 func (p *DouyinProvider) Search(ctx context.Context, keyword string, limit int) ([]model.Video, error) {
@@ -67,108 +110,81 @@ func (p *DouyinProvider) Search(ctx context.Context, keyword string, limit int) 
 	}
 
 	switch p.mode {
-	case "authenticated":
-		cookie := strings.TrimSpace(os.Getenv("DOUYIN_COOKIE"))
-		if cookie == "" {
-			return nil, fmt.Errorf("DOUYIN_MODE=authenticated requires DOUYIN_COOKIE")
-		}
-		return p.searchCLI(ctx, keyword, limit, cookie, envSeconds("DOUYIN_AUTH_TIMEOUT_SEC", 60))
-	case "guest":
-		return p.searchGuest(ctx, keyword, limit)
-	case "auto":
-		cookie := strings.TrimSpace(os.Getenv("DOUYIN_COOKIE"))
-		var authErr error
-		if cookie != "" {
-			results, err := p.searchCLI(ctx, keyword, limit, cookie, envSeconds("DOUYIN_AUTH_TIMEOUT_SEC", 40))
-			if err == nil && len(results) > 0 {
-				return results, nil
-			}
-			authErr = err
-		}
-
-		results, guestErr := p.searchGuest(ctx, keyword, limit)
-		if guestErr == nil && len(results) > 0 {
+	case "browser":
+		return p.searchBrowser(ctx, keyword, limit)
+	case "hybrid":
+		results, browserErr := p.searchBrowser(ctx, keyword, limit)
+		if browserErr == nil && len(results) > 0 {
 			return results, nil
 		}
-		if authErr != nil {
-			return nil, fmt.Errorf("douyin auto discovery failed: authenticated=%v; guest=%v", authErr, guestErr)
+		publicResults, publicErr := p.searchPublicIndex(ctx, keyword, limit)
+		if publicErr == nil && len(publicResults) > 0 {
+			return publicResults, nil
 		}
-		return nil, guestErr
+		return nil, fmt.Errorf("douyin hybrid discovery failed: browser=%v; public-index=%v", browserErr, publicErr)
+	case "public":
+		return p.searchPublicIndex(ctx, keyword, limit)
 	default:
-		return nil, fmt.Errorf("invalid DOUYIN_MODE %q; use auto, authenticated, or guest", p.mode)
+		return nil, fmt.Errorf("invalid DOUYIN_MODE %q; use browser, hybrid, or public", p.mode)
 	}
 }
 
-func (p *DouyinProvider) searchGuest(ctx context.Context, keyword string, limit int) ([]model.Video, error) {
-	var cliErr error
-	if _, err := executable(p.binary); err == nil {
-		results, err := p.searchCLI(ctx, keyword, limit, "", envSeconds("DOUYIN_GUEST_CLI_TIMEOUT_SEC", 18))
-		if err == nil && len(results) > 0 {
-			return results, nil
-		}
-		cliErr = err
-	}
-
-	results, webErr := p.searchPublicIndex(ctx, keyword, limit)
-	if webErr == nil && len(results) > 0 {
-		return results, nil
-	}
-	if cliErr != nil {
-		return nil, fmt.Errorf("douyin guest discovery failed: cli=%v; public-index=%v", cliErr, webErr)
-	}
-	if webErr != nil {
-		return nil, fmt.Errorf("douyin guest public discovery failed: %w", webErr)
-	}
-	return nil, fmt.Errorf("douyin guest discovery returned no public videos for %q", keyword)
-}
-
-func (p *DouyinProvider) searchCLI(ctx context.Context, keyword string, limit int, cookie string, timeout time.Duration) ([]model.Video, error) {
-	bin, err := executable(p.binary)
+func (p *DouyinProvider) searchBrowser(ctx context.Context, keyword string, limit int) ([]model.Video, error) {
+	python, err := executable(p.python)
 	if err != nil {
 		return nil, err
 	}
+	if info, err := os.Stat(p.bridge); err != nil || info.IsDir() {
+		if err == nil {
+			err = fmt.Errorf("path is a directory")
+		}
+		return nil, fmt.Errorf("Douyin browser bridge unavailable at %s: %w", p.bridge, err)
+	}
 
+	timeout := envSeconds("DOUYIN_BROWSER_SEARCH_TIMEOUT_SEC", 75)
 	attemptCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	tmp, err := os.MkdirTemp("", "videoget-douyin-*")
-	if err != nil {
-		return nil, fmt.Errorf("create temp dir: %w", err)
-	}
-	defer os.RemoveAll(tmp)
 
-	cmd := exec.CommandContext(attemptCtx, bin,
-		"-u", keyword,
-		"-t", "search",
-		"-l", strconv.Itoa(limit),
-		"--no-download",
-		"-p", tmp,
+	cmd := exec.CommandContext(
+		attemptCtx,
+		python,
+		p.bridge,
+		"search",
+		"--keyword", keyword,
+		"--limit", strconv.Itoa(limit),
 	)
-	cmd.Env = douyinCommandEnv(cookie)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
+	cmd.Env = os.Environ()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
 		if attemptCtx.Err() != nil {
-			return nil, fmt.Errorf("douyin search timed out after %s", timeout)
+			return nil, fmt.Errorf("Douyin browser search timed out after %s", timeout)
 		}
-		return nil, fmt.Errorf("douyin search failed: %s", strings.TrimSpace(string(output)))
+		message := strings.TrimSpace(stderr.String())
+		if message == "" {
+			message = err.Error()
+		}
+		return nil, fmt.Errorf("Douyin browser search failed: %s", message)
 	}
-
-	files, _ := filepath.Glob(filepath.Join(tmp, "*.json"))
-	if len(files) == 0 {
-		return nil, fmt.Errorf("douyin-cli completed but no metadata JSON was produced")
-	}
-	sort.Strings(files)
-	data, err := os.ReadFile(files[len(files)-1])
+	results, err := parseDouyinMetadata(stdout.Bytes(), keyword)
 	if err != nil {
 		return nil, err
 	}
-	return parseDouyinMetadata(data, keyword)
+	if len(results) == 0 {
+		return nil, fmt.Errorf("Douyin browser search returned no video candidates for %q", keyword)
+	}
+	return results, nil
 }
 
 func parseDouyinMetadata(data []byte, keyword string) ([]model.Video, error) {
 	var items []map[string]any
-	if err := json.Unmarshal(data, &items); err != nil {
-		return nil, fmt.Errorf("parse douyin metadata: %w", err)
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(&items); err != nil {
+		return nil, fmt.Errorf("parse Douyin browser metadata: %w", err)
 	}
+
 	results := make([]model.Video, 0, len(items))
 	for _, item := range items {
 		id := asString(item["id"])
@@ -179,6 +195,10 @@ func parseDouyinMetadata(data []byte, keyword string) ([]model.Video, error) {
 		if duration > 10000 {
 			duration /= 1000
 		}
+		searchSource := strings.TrimSpace(asString(item["search_source"]))
+		if searchSource == "" {
+			searchSource = keyword
+		}
 		v := model.Video{
 			ID:           id,
 			Platform:     "douyin",
@@ -186,12 +206,14 @@ func parseDouyinMetadata(data []byte, keyword string) ([]model.Video, error) {
 			Author:       asString(item["author_nickname"]),
 			URL:          "https://www.douyin.com/video/" + id,
 			Thumbnail:    asString(item["cover"]),
+			MediaType:    "video",
 			DurationSec:  duration,
+			Views:        asInt64(item["play_count"]),
 			Likes:        asInt64(item["digg_count"]),
 			Comments:     asInt64(item["comment_count"]),
 			Shares:       asInt64(item["share_count"]),
 			DownloadURL:  asString(item["download_addr"]),
-			SearchSource: keyword,
+			SearchSource: searchSource,
 		}
 		if ts := asInt64(item["time"]); ts > 0 {
 			t := time.Unix(ts, 0).UTC()
@@ -286,6 +308,7 @@ func parseGuestRSS(data []byte, keyword string, limit int) ([]model.Video, error
 			Platform:     "douyin",
 			Title:        title,
 			URL:          "https://www.douyin.com/video/" + id,
+			MediaType:    "video",
 			SearchSource: keyword,
 		})
 		if len(results) >= limit {
@@ -309,20 +332,6 @@ func cleanGuestTitle(value string) string {
 		value = strings.TrimSpace(strings.TrimSuffix(value, suffix))
 	}
 	return value
-}
-
-func douyinCommandEnv(cookie string) []string {
-	env := make([]string, 0, len(os.Environ())+1)
-	for _, item := range os.Environ() {
-		if strings.HasPrefix(item, "DOUYIN_COOKIE=") {
-			continue
-		}
-		env = append(env, item)
-	}
-	if strings.TrimSpace(cookie) != "" {
-		env = append(env, "DOUYIN_COOKIE="+cookie)
-	}
-	return env
 }
 
 func envSeconds(name string, fallback int) time.Duration {

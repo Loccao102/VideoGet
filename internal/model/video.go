@@ -12,24 +12,28 @@ type VideoScores struct {
 }
 
 type Video struct {
-	ID           string       `json:"id"`
-	Platform     string       `json:"platform"`
-	Title        string       `json:"title"`
-	Author       string       `json:"author,omitempty"`
-	URL          string       `json:"url"`
-	Thumbnail    string       `json:"thumbnail,omitempty"`
+	ID        string `json:"id"`
+	Platform  string `json:"platform"`
+	Title     string `json:"title"`
+	Author    string `json:"author,omitempty"`
+	URL       string `json:"url"`
+	Thumbnail string `json:"thumbnail,omitempty"`
 	// MediaType is "video", "image", or empty/"unknown" when public discovery
 	// has not verified the underlying post yet.
-	MediaType    string       `json:"mediaType,omitempty"`
-	DurationSec  int64        `json:"durationSec,omitempty"`
-	Views        int64        `json:"views,omitempty"`
-	Likes        int64        `json:"likes,omitempty"`
-	Comments     int64        `json:"comments,omitempty"`
-	Shares       int64        `json:"shares,omitempty"`
-	PublishedAt  *time.Time   `json:"publishedAt,omitempty"`
-	DownloadURL  string       `json:"downloadUrl,omitempty"`
-	SearchSource string       `json:"searchSource,omitempty"`
+	MediaType   string `json:"mediaType,omitempty"`
+	DurationSec int64  `json:"durationSec,omitempty"`
+	Views       int64  `json:"views,omitempty"`
+	Likes       int64  `json:"likes,omitempty"`
+	Comments    int64  `json:"comments,omitempty"`
+	Shares      int64  `json:"shares,omitempty"`
+	PublishedAt *time.Time `json:"publishedAt,omitempty"`
+	DownloadURL string     `json:"downloadUrl,omitempty"`
+	SearchSource string    `json:"searchSource,omitempty"`
 	Scores       *VideoScores `json:"scores,omitempty"`
+	// LocalizationMode is attached only when a candidate is queued. Discovery
+	// providers leave it empty. Supported values are subtitles_tts and
+	// subtitles_only; an empty value keeps the legacy subtitles_tts behaviour.
+	LocalizationMode string `json:"localizationMode,omitempty"`
 }
 
 type SearchFilters struct {

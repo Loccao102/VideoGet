@@ -25,12 +25,48 @@ jobs:
       - run: go build ./...
       - run: >-
           python -m py_compile
+          scripts/douyin_browser_bridge.py
+          scripts/douyin_wrapper.py
           scripts/localize.py
           scripts/localize_fast.py
           scripts/localize_worker.py
           scripts/analyze_layout.py
           scripts/smart_render.py
+          scripts/subtitle_only_render.py
           scripts/localize_smart.py
+          scripts/localize_smart_v22.py
           scripts/localize_worker_smart.py
+          scripts/localize_worker_smart_v22.py
+          scripts/adaptive_tts.py
+          scripts/tts_preview.py
+          scripts/rerender_subtitles.py
+          scripts/rerender_subtitles_only.py
+          scripts/retranslate_subtitles.py
+          scripts/retranslate_subtitles_v22.py
+          scripts/retranslate_subtitles_v23.py
+          scripts/contextual_translate.py
+          scripts/context_overrides.py
+          scripts/translation_endpoint.py
+          scripts/utterance_translate.py
+          scripts/utterance_translate_v22.py
+          scripts/utterance_translate_v23.py
+          scripts/utterance_translate_v24.py
+          scripts/localization_v2_quality.py
+      - name: Test Localization V2 helpers
+        run: python -m unittest discover -s scripts/tests -p 'test_*.py'
+      - name: Validate web JavaScript
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          for name in ('index.html', 'subtitles.html'):
+              html = Path('web', name).read_text(encoding='utf-8')
+              match = re.search(r'<script>([\s\S]*?)</script>', html)
+              if not match:
+                  raise SystemExit(f'inline script not found in {name}')
+              Path('/tmp', name + '.js').write_text(match.group(1), encoding='utf-8')
+          PY
+          node --check /tmp/index.html.js
+          node --check /tmp/subtitles.html.js
       - name: Validate Dockerfile
         run: docker buildx build --check .

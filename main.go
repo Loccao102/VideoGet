@@ -39,7 +39,7 @@ func main() {
 	api := httpapi.New(providers, jobs, web)
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           api.Handler(),
+		Handler:           httpapi.WithSubtitleRoutes(api.Handler(), jobs),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      90 * time.Second,

@@ -1,6 +1,3 @@
-FROM rust:1.88-bookworm AS douyin-builder
-RUN cargo install douyin-cli --locked --root /opt/douyin
-
 FROM golang:1.26-bookworm AS go-builder
 WORKDIR /src
 RUN go install github.com/tamnd/bilibili-cli/cmd/bili@v0.3.0
@@ -18,24 +15,33 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     apt-get update \
     && apt-get install -y --no-install-recommends \
-        ca-certificates \
-        curl \
-        ffmpeg \
-        fonts-noto-core \
-        fonts-noto-cjk \
-        fonts-noto-color-emoji
+    ca-certificates \
+    curl \
+    ffmpeg \
+    nodejs \
+    npm \
+    fonts-noto-core \
+    fonts-noto-cjk \
+    fonts-noto-color-emoji
 
+# Playwright is installed as a CDP client only. Chromium/Edge runs on the Windows host
+# so VideoGet can use the real browser session without copying Douyin cookies/tokens.
 RUN pip install --no-cache-dir \
     yt-dlp==2026.8.19 \
+    playwright==1.55.0 \
     faster-whisper \
     edge-tts==7.2.8 \
     pydub \
     opencv-python-headless
 
-COPY --from=douyin-builder /opt/douyin/bin/douyin /usr/local/bin/douyin
 COPY --from=go-builder /go/bin/bili /usr/local/bin/bili
 COPY --from=go-builder /out/videoget /usr/local/bin/videoget
 COPY scripts /app/scripts
+# Windows checkouts can rewrite Python files to CRLF. Normalize scripts before
+# shebang execution; the Douyin browser bridge replaces douyin-cli completely.
+RUN find /app/scripts -type f -name '*.py' -exec sed -i 's/\r$//' {} + \
+    && chmod +x /app/scripts/douyin_browser_bridge.py /app/scripts/douyin_wrapper.py \
+    && ln -sf /app/scripts/douyin_wrapper.py /usr/local/bin/douyin
 
 WORKDIR /app
 RUN mkdir -p /app/downloads /root/.cache
@@ -46,9 +52,15 @@ ENV PYTHONUNBUFFERED=1 \
     JOB_DB_PATH=/app/downloads/videoget.db \
     DOWNLOAD_CONCURRENCY=3 \
     JOB_TIMEOUT_MINUTES=180 \
-    DOUYIN_MODE=auto \
+    DOUYIN_MODE=browser \
     DOUYIN_BIN=douyin \
-    DOUYIN_GUEST_CLI_TIMEOUT_SEC=18 \
+    DOUYIN_BROWSER_BRIDGE=/app/scripts/douyin_browser_bridge.py \
+    DOUYIN_CDP_URL=http://host.docker.internal:9222 \
+    DOUYIN_BROWSER_CONNECT_TIMEOUT_SEC=8 \
+    DOUYIN_BROWSER_SEARCH_TIMEOUT_SEC=75 \
+    DOUYIN_BROWSER_TIMEOUT_SEC=45 \
+    DOUYIN_BROWSER_SCROLLS=6 \
+    DOUYIN_BROWSER_DOWNLOAD_TIMEOUT_SEC=120 \
     DOUYIN_GUEST_TIMEOUT_SEC=20 \
     BILIBILI_BIN=bili \
     BILIBILI_SEARCH_DELAY_MS=1200 \
@@ -56,10 +68,10 @@ ENV PYTHONUNBUFFERED=1 \
     BILIBILI_RETRIES=2 \
     BILIBILI_DOWNLOAD_ATTEMPTS=3 \
     AUTO_LOCALIZE=true \
-    LOCALIZE_SCRIPT=/app/scripts/localize_smart.py \
+    LOCALIZE_SCRIPT=/app/scripts/localize_smart_v22.py \
     LOCALIZE_CONCURRENCY=1 \
     LOCALIZE_PERSISTENT_WORKER=true \
-    LOCALIZE_WORKER_SCRIPT=/app/scripts/localize_worker_smart.py \
+    LOCALIZE_WORKER_SCRIPT=/app/scripts/localize_worker_smart_v22.py \
     LOCALIZE_WORKER_FALLBACK=true \
     LOCALIZE_WORKER_PREWARM=true \
     LOCALIZE_WORKER_START_TIMEOUT_SEC=600 \

@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
-"""One-shot localization entrypoint with smart preserve-frame rendering."""
+"""One-shot localization entrypoint with contextual translation + smart rendering."""
 import json
 import sys
 from pathlib import Path
 
+import adaptive_tts
+import utterance_translate as contextual_translate
 import localize as base
-import localize_fast as fast  # installs fast translation/TTS overrides on base
+import localize_fast as fast
 import smart_render
 
+fast.TRANSLATION_PROMPT_VERSION = contextual_translate.TRANSLATION_PROMPT_VERSION
+fast.translate_segments = contextual_translate.translate_segments
+base.translate_segments = contextual_translate.translate_segments
+fast.synthesize_segments = adaptive_tts.synthesize_segments
+base.synthesize_segments = adaptive_tts.synthesize_segments
 base.render_video = smart_render.render_video
 
 

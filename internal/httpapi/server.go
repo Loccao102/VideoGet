@@ -145,6 +145,40 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		sourceKeywords := keywordsForSource(name, keywords)
+
+		// Douyin aggressively risk-controls concurrent web searches. Expanded
+		// keywords therefore run sequentially with a small delay, while other
+		// providers can still run in parallel. Stop immediately when Douyin asks
+		// for verification instead of hammering the remaining keywords.
+		if name == "douyin" {
+			wg.Add(1)
+			go func(name string, provider source.Provider, sourceKeywords []string) {
+				defer wg.Done()
+				delay := time.Duration(envPositiveInt("DOUYIN_SEARCH_DELAY_MS", 1800)) * time.Millisecond
+				for i, keyword := range sourceKeywords {
+					if i > 0 {
+						timer := time.NewTimer(delay)
+						select {
+						case <-r.Context().Done():
+							if !timer.Stop() {
+								<-timer.C
+							}
+							return
+						case <-timer.C:
+						}
+					}
+					ctx, cancel := context.WithTimeout(r.Context(), 75*time.Second)
+					videos, err := provider.Search(ctx, keyword, perQueryLimit)
+					cancel()
+					results <- providerResult{source: name, keyword: keyword, videos: videos, err: err}
+					if isDouyinChallengeError(err) {
+						break
+					}
+				}
+			}(name, provider, append([]string(nil), sourceKeywords...))
+			continue
+		}
+
 		for _, keyword := range sourceKeywords {
 			keyword := keyword
 			wg.Add(1)
@@ -190,6 +224,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 	}
 	for sourceName, errors := range sourceErrors {
 		if sourceSuccess[sourceName] > 0 {
+			response.Errors[sourceName] = "một phần keyword lỗi; vẫn có kết quả: " + summarizeErrors(errors)
 			continue
 		}
 		response.Errors[sourceName] = summarizeErrors(errors)
@@ -262,6 +297,17 @@ func (s *Server) expandFreeSources(requested []string) []string {
 }
 
 func keywordsForSource(name string, keywords []string) []string {
+	if len(keywords) == 0 {
+		return keywords
+	}
+	if name == "douyin" {
+		ordered := prioritizeDouyinKeywords(keywords)
+		limit := envPositiveInt("DOUYIN_KEYWORD_LIMIT", 4)
+		if limit > len(ordered) {
+			limit = len(ordered)
+		}
+		return ordered[:limit]
+	}
 	if !isPublicShortSource(name) {
 		return keywords
 	}
@@ -270,6 +316,55 @@ func keywordsForSource(name string, keywords []string) []string {
 		limit = len(keywords)
 	}
 	return keywords[:limit]
+}
+
+func prioritizeDouyinKeywords(keywords []string) []string {
+	out := make([]string, 0, len(keywords))
+	seen := map[string]struct{}{}
+	appendKeyword := func(keyword string) {
+		keyword = strings.TrimSpace(keyword)
+		if keyword == "" {
+			return
+		}
+		key := strings.ToLower(keyword)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, keyword)
+	}
+	for _, keyword := range keywords {
+		if containsHan(keyword) {
+			appendKeyword(keyword)
+		}
+	}
+	for _, keyword := range keywords {
+		if !containsHan(keyword) {
+			appendKeyword(keyword)
+		}
+	}
+	return out
+}
+
+func containsHan(value string) bool {
+	for _, r := range value {
+		if (r >= '\u3400' && r <= '\u4dbf') || (r >= '\u4e00' && r <= '\u9fff') {
+			return true
+		}
+	}
+	return false
+}
+
+func isDouyinChallengeError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "触发验证码") ||
+		strings.Contains(message, "验证码") ||
+		strings.Contains(message, "captcha") ||
+		strings.Contains(message, "verify_check") ||
+		strings.Contains(message, "verification")
 }
 
 func isPublicShortSource(name string) bool {
