@@ -9,13 +9,17 @@ services:
       JOB_DB_PATH: "${JOB_DB_PATH:-/app/downloads/videoget.db}"
       DOWNLOAD_CONCURRENCY: "${DOWNLOAD_CONCURRENCY:-3}"
       JOB_TIMEOUT_MINUTES: "${JOB_TIMEOUT_MINUTES:-180}"
-      DOUYIN_MODE: "${DOUYIN_MODE:-auto}"
-      DOUYIN_COOKIE: "${DOUYIN_COOKIE:-}"
+      # Douyin runs through a real Chrome/Edge session exposed over CDP.
+      # Start scripts/start_douyin_browser.ps1 on Windows before using Douyin.
+      DOUYIN_MODE: "${DOUYIN_MODE:-browser}"
       DOUYIN_BIN: "${DOUYIN_BIN:-/app/scripts/douyin_wrapper.py}"
-      DOUYIN_REAL_BIN: "${DOUYIN_REAL_BIN:-/usr/local/bin/douyin}"
-      DOUYIN_DOWNLOAD_USE_ENV_COOKIE: "${DOUYIN_DOWNLOAD_USE_ENV_COOKIE:-false}"
-      DOUYIN_AUTH_TIMEOUT_SEC: "${DOUYIN_AUTH_TIMEOUT_SEC:-40}"
-      DOUYIN_GUEST_CLI_TIMEOUT_SEC: "${DOUYIN_GUEST_CLI_TIMEOUT_SEC:-18}"
+      DOUYIN_BROWSER_BRIDGE: "${DOUYIN_BROWSER_BRIDGE:-/app/scripts/douyin_browser_bridge.py}"
+      DOUYIN_CDP_URL: "${DOUYIN_CDP_URL:-http://host.docker.internal:9222}"
+      DOUYIN_BROWSER_CONNECT_TIMEOUT_SEC: "${DOUYIN_BROWSER_CONNECT_TIMEOUT_SEC:-8}"
+      DOUYIN_BROWSER_SEARCH_TIMEOUT_SEC: "${DOUYIN_BROWSER_SEARCH_TIMEOUT_SEC:-75}"
+      DOUYIN_BROWSER_TIMEOUT_SEC: "${DOUYIN_BROWSER_TIMEOUT_SEC:-45}"
+      DOUYIN_BROWSER_SCROLLS: "${DOUYIN_BROWSER_SCROLLS:-6}"
+      DOUYIN_BROWSER_DOWNLOAD_TIMEOUT_SEC: "${DOUYIN_BROWSER_DOWNLOAD_TIMEOUT_SEC:-120}"
       DOUYIN_GUEST_TIMEOUT_SEC: "${DOUYIN_GUEST_TIMEOUT_SEC:-20}"
       DOUYIN_GUEST_SEARCH_URL: "${DOUYIN_GUEST_SEARCH_URL:-}"
       DOUYIN_GUEST_USER_AGENT: "${DOUYIN_GUEST_USER_AGENT:-Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36}"
@@ -151,9 +155,7 @@ services:
     volumes:
       - ./downloads:/app/downloads
       - whisper-cache:/root/.cache
-      - douyin-auth:/root/.config/douyin-cli
     restart: unless-stopped
 
 volumes:
   whisper-cache:
-  douyin-auth:
