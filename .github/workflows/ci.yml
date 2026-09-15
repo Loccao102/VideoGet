@@ -25,6 +25,7 @@ jobs:
       - run: go build ./...
       - run: >-
           python -m py_compile
+          scripts/douyin_wrapper.py
           scripts/localize.py
           scripts/localize_fast.py
           scripts/localize_worker.py
