@@ -39,6 +39,7 @@ jobs:
           scripts/adaptive_tts.py
           scripts/tts_preview.py
           scripts/rerender_subtitles.py
+          scripts/rerender_subtitles_only.py
           scripts/retranslate_subtitles.py
           scripts/retranslate_subtitles_v22.py
           scripts/retranslate_subtitles_v23.py
