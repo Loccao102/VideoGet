@@ -1,9 +1,6 @@
 package source
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
 func TestParseGuestRSS(t *testing.T) {
 	rss := `<?xml version="1.0" encoding="utf-8"?>
@@ -47,29 +44,17 @@ func TestParseGuestRSS(t *testing.T) {
 	}
 }
 
-func TestDouyinCommandEnvGuestStripsCookie(t *testing.T) {
-	t.Setenv("DOUYIN_COOKIE", "secret-cookie")
-	env := douyinCommandEnv("")
-	for _, item := range env {
-		if strings.HasPrefix(item, "DOUYIN_COOKIE=") {
-			t.Fatalf("guest env leaked cookie: %q", item)
-		}
+func TestDouyinProviderDoesNotRequireCLI(t *testing.T) {
+	t.Setenv("PATH", "")
+	provider := NewDouyinProvider()
+	if err := provider.Available(); err != nil {
+		t.Fatalf("Available() = %v, want nil without douyin-cli", err)
 	}
 }
 
-func TestDouyinCommandEnvAuthenticatedSetsCookie(t *testing.T) {
-	t.Setenv("DOUYIN_COOKIE", "old-cookie")
-	env := douyinCommandEnv("new-cookie")
-	count := 0
-	for _, item := range env {
-		if strings.HasPrefix(item, "DOUYIN_COOKIE=") {
-			count++
-			if item != "DOUYIN_COOKIE=new-cookie" {
-				t.Fatalf("unexpected cookie env: %q", item)
-			}
-		}
-	}
-	if count != 1 {
-		t.Fatalf("cookie env count = %d, want 1", count)
+func TestExtractDouyinVideoID(t *testing.T) {
+	got := extractDouyinVideoID("https://www.douyin.com/video/7664188112177079482?previous_page=web_code_link")
+	if got != "7664188112177079482" {
+		t.Fatalf("extractDouyinVideoID() = %q", got)
 	}
 }

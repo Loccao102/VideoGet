@@ -353,7 +353,7 @@ func (m *Manager) download(ctx context.Context, video model.Video, outputDir str
 	case "bilibili":
 		return m.ytdlpBilibili(ctx, video.URL, outputDir)
 	case "douyin":
-		return m.douyin(ctx, video.URL, outputDir)
+		return m.douyinResumableDirect(ctx, video.URL, outputDir)
 	default:
 		if isPublicDownloadPlatform(platform) {
 			return m.ytdlpPublic(ctx, platform, video.URL, outputDir)
