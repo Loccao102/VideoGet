@@ -1,6 +1,3 @@
-FROM rust:1.88-bookworm AS douyin-builder
-RUN cargo install douyin-cli --locked --root /opt/douyin
-
 FROM golang:1.26-bookworm AS go-builder
 WORKDIR /src
 RUN go install github.com/tamnd/bilibili-cli/cmd/bili@v0.3.0
@@ -32,7 +29,6 @@ RUN pip install --no-cache-dir \
     pydub \
     opencv-python-headless
 
-COPY --from=douyin-builder /opt/douyin/bin/douyin /usr/local/bin/douyin
 COPY --from=go-builder /go/bin/bili /usr/local/bin/bili
 COPY --from=go-builder /out/videoget /usr/local/bin/videoget
 COPY scripts /app/scripts
@@ -46,10 +42,11 @@ ENV PYTHONUNBUFFERED=1 \
     JOB_DB_PATH=/app/downloads/videoget.db \
     DOWNLOAD_CONCURRENCY=3 \
     JOB_TIMEOUT_MINUTES=180 \
-    DOUYIN_MODE=auto \
-    DOUYIN_BIN=douyin \
-    DOUYIN_GUEST_CLI_TIMEOUT_SEC=18 \
-    DOUYIN_GUEST_TIMEOUT_SEC=20 \
+    DOUYIN_SEARCH_TIMEOUT_SEC=20 \
+    DOUYIN_DOWNLOAD_ATTEMPTS=2 \
+    DOUYIN_PAGE_FALLBACK=true \
+    DOUYIN_PAGE_TIMEOUT_SEC=25 \
+    DOUYIN_MEDIA_TIMEOUT_SEC=120 \
     BILIBILI_BIN=bili \
     BILIBILI_SEARCH_DELAY_MS=1200 \
     BILIBILI_REQUEST_RATE=800ms \
