@@ -38,6 +38,7 @@ COPY --from=douyin-builder /opt/douyin/bin/douyin /usr/local/bin/douyin
 COPY --from=go-builder /go/bin/bili /usr/local/bin/bili
 COPY --from=go-builder /out/videoget /usr/local/bin/videoget
 COPY scripts /app/scripts
+RUN chmod +x /app/scripts/douyin_wrapper.py
 
 WORKDIR /app
 RUN mkdir -p /app/downloads /root/.cache /root/.config/douyin-cli
@@ -49,7 +50,9 @@ ENV PYTHONUNBUFFERED=1 \
     DOWNLOAD_CONCURRENCY=3 \
     JOB_TIMEOUT_MINUTES=180 \
     DOUYIN_MODE=auto \
-    DOUYIN_BIN=douyin \
+    DOUYIN_BIN=/app/scripts/douyin_wrapper.py \
+    DOUYIN_REAL_BIN=/usr/local/bin/douyin \
+    DOUYIN_DOWNLOAD_USE_ENV_COOKIE=false \
     DOUYIN_GUEST_CLI_TIMEOUT_SEC=18 \
     DOUYIN_GUEST_TIMEOUT_SEC=20 \
     BILIBILI_BIN=bili \
