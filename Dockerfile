@@ -22,6 +22,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         fonts-noto-cjk \
         fonts-noto-color-emoji
 
+# yt-dlp remains for the existing Bilibili/public-source branches. Douyin no longer calls it.
 RUN pip install --no-cache-dir \
     yt-dlp==2026.8.19 \
     faster-whisper \
@@ -43,10 +44,11 @@ ENV PYTHONUNBUFFERED=1 \
     DOWNLOAD_CONCURRENCY=3 \
     JOB_TIMEOUT_MINUTES=180 \
     DOUYIN_SEARCH_TIMEOUT_SEC=20 \
-    DOUYIN_DOWNLOAD_ATTEMPTS=2 \
-    DOUYIN_PAGE_FALLBACK=true \
+    DOUYIN_RESOLVE_TIMEOUT_SEC=18 \
     DOUYIN_PAGE_TIMEOUT_SEC=25 \
     DOUYIN_MEDIA_TIMEOUT_SEC=120 \
+    DOUYIN_MEDIA_CANDIDATES=12 \
+    DOUYIN_PREFER_ORIGINAL=false \
     BILIBILI_BIN=bili \
     BILIBILI_SEARCH_DELAY_MS=1200 \
     BILIBILI_REQUEST_RATE=800ms \
