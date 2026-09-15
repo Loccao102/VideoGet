@@ -13,10 +13,11 @@ valid user-authenticated CLI session with a stale/incomplete environment cookie.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 import subprocess
 import sys
 
-REAL_DOUYIN = os.getenv("DOUYIN_REAL_BIN", "/usr/local/bin/douyin")
+DEFAULT_REAL_DOUYIN = "/usr/local/bin/douyin-real"
 
 
 def truthy(value: str | None) -> bool:
@@ -31,6 +32,20 @@ def task_type(args: list[str]) -> str:
         return ""
 
 
+def real_binary() -> str:
+    configured = os.getenv("DOUYIN_REAL_BIN", DEFAULT_REAL_DOUYIN).strip() or DEFAULT_REAL_DOUYIN
+    try:
+        configured_path = Path(configured).resolve()
+        self_path = Path(sys.argv[0]).resolve()
+        # Protect old compose/.env values such as DOUYIN_REAL_BIN=douyin from
+        # recursively invoking this wrapper after it becomes the default command.
+        if configured_path == self_path and Path(DEFAULT_REAL_DOUYIN).exists():
+            return DEFAULT_REAL_DOUYIN
+    except OSError:
+        pass
+    return configured
+
+
 def main() -> int:
     args = sys.argv[1:]
     env = os.environ.copy()
@@ -40,7 +55,7 @@ def main() -> int:
         removed_cookie = bool(env.pop("DOUYIN_COOKIE", None))
 
     process = subprocess.run(
-        [REAL_DOUYIN, *args],
+        [real_binary(), *args],
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
