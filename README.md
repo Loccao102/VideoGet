@@ -19,7 +19,7 @@ chủ đề tiếng Việt
 ## Tính năng hiện tại
 
 ### Discovery
-- Search **Douyin** qua `douyin-cli`.
+- Search **Douyin** không phụ thuộc CLI riêng: dùng public web index để lấy canonical `douyin.com/video/...` URL.
 - Search **Bilibili** qua `bilibili-cli`; request được throttle để giảm lỗi risk-control `-412`.
 - Keyword expander deterministic + Ollama cho chủ đề tiếng Việt.
 - Search nhiều keyword, deduplicate, filter và xếp hạng candidate.
@@ -28,6 +28,8 @@ chủ đề tiếng Việt
 
 ### Download
 - Mỗi job có thư mục riêng.
+- Douyin download bằng `yt-dlp` trước; nếu extractor bị anti-bot/API chặn thì fallback đọc trang video/share page để tìm media URL và tải trực tiếp.
+- `DOUYIN_COOKIE` được chuyển tạm sang Netscape cookie file cho `yt-dlp`, không ghi cookie thật vào repo.
 - Bilibili download bằng `yt-dlp`, có nhiều format fallback, retry/backoff và kiểm tra audio bằng `ffprobe`.
 - `DOWNLOAD_CONCURRENCY` giới hạn số download chạy đồng thời.
 
@@ -162,6 +164,8 @@ BILIBILI_COOKIE=
 ```
 
 Cookie phải lấy từ chính browser session mà bạn có quyền sử dụng. Không commit cookie thật lên GitHub.
+
+Douyin không còn yêu cầu `douyin-cli`. Cookie chỉ được dùng để tăng khả năng resolve metadata/media khi Douyin áp dụng anti-bot; discovery public vẫn có thể chạy khi cookie trống.
 
 ### Start
 
@@ -302,7 +306,10 @@ downloads/
 | `JOB_DB_PATH` | `/app/downloads/videoget.db` | SQLite job store |
 | `DOWNLOAD_CONCURRENCY` | `3` | download đồng thời |
 | `JOB_TIMEOUT_MINUTES` | `180` | timeout toàn job |
-| `DOUYIN_COOKIE` | trống | session Douyin |
+| `DOUYIN_COOKIE` | trống | session Douyin, optional nhưng nên có cho download |
+| `DOUYIN_SEARCH_TIMEOUT_SEC` | `20` | timeout discovery Douyin public index |
+| `DOUYIN_DOWNLOAD_ATTEMPTS` | `2` | số chiến lược format yt-dlp cho Douyin |
+| `DOUYIN_PAGE_FALLBACK` | `true` | fallback resolve media từ trang Douyin/share |
 | `BILIBILI_COOKIE` | trống | session Bilibili |
 | `KEYWORD_EXPANDER` | `ollama` | keyword expansion |
 | `AUTO_LOCALIZE` | `true` | tự Việt hóa sau download |
@@ -334,7 +341,8 @@ Go API
    |     +-- Ollama keyword expander
    |
    +-- Source adapters
-   |     +-- Douyin -> douyin-cli
+   |     +-- Douyin search -> public web index
+   |     +-- Douyin download -> yt-dlp -> page/share media fallback
    |     +-- Bilibili search -> bili CLI
    |     +-- Bilibili download -> yt-dlp
    |
@@ -366,6 +374,6 @@ Go API
 
 ## Third-party & sử dụng nội dung
 
-VideoGet tích hợp/call `douyin-cli`, `bilibili-cli`, `yt-dlp`, `faster-whisper`, `edge-tts`, FFmpeg, Ollama và SQLite.
+VideoGet tích hợp/call `bilibili-cli`, `yt-dlp`, `faster-whisper`, `edge-tts`, FFmpeg, Ollama và SQLite. Douyin không còn dùng CLI riêng.
 
-`douyin-cli` upstream dùng AGPL-3.0. Hãy xem kỹ license và điều khoản nền tảng trước khi redistribute/dùng thương mại. Chỉ tải và biến đổi nội dung bạn có quyền sử dụng; translation, dubbing hoặc xóa watermark không tự tạo quyền tái sử dụng nội dung.
+Hãy xem kỹ license và điều khoản của từng nền tảng/công cụ trước khi redistribute hoặc dùng thương mại. Chỉ tải và biến đổi nội dung bạn có quyền sử dụng; translation, dubbing hoặc xóa watermark không tự tạo quyền tái sử dụng nội dung.
