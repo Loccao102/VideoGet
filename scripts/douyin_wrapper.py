@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
 """Auth-aware douyin-cli launcher used by VideoGet.
 
-Search may intentionally use DOUYIN_COOKIE from the environment. Aweme downloads
-prefer the session persisted by `douyin auth cookie-login`, because pasted cookies
-can be stale or incomplete. If that persisted session is rejected specifically by
-Argus for missing UIFID, the wrapper may retry exactly once with DOUYIN_COOKIE.
+Search uses the configured environment as-is. Aweme downloads prefer a fresh,
+complete browser cookie from DOUYIN_COOKIE when it contains both UIFID and a
+recognizable login/session key. This matches how douyin-cli documents browser
+Cookie authentication for single-work downloads and avoids silently discarding a
+valid environment cookie in favor of an older persisted CLI session.
 
-Some browser exports expose UIFID_TEMP but omit UIFID from the copied cookie string.
-When DOUYIN_UIFID is supplied from the same authenticated browser/session, VideoGet
-may append it as `UIFID=<value>` to DOUYIN_COOKIE only when UIFID is otherwise
-missing. It never derives UIFID from UIFID_TEMP and never overwrites an existing
-UIFID cookie.
+If the environment cookie is incomplete, VideoGet falls back to the session saved
+by `douyin auth cookie-login`. If the chosen session is rejected specifically by
+Argus/UIFID checks, the wrapper may try the other user-provided session exactly
+once. It never generates tokens, solves verification, or bypasses risk controls.
 
-This wrapper does not generate tokens, solve verification, or bypass Douyin risk
-controls. It only chooses/combines user-provided authenticated session material.
+DOUYIN_UIFID remains an optional compatibility aid for browser exports that truly
+lack UIFID: it may append UIFID to an existing DOUYIN_COOKIE, but never promotes
+UIFID_TEMP, never overwrites an existing UIFID, and never treats UIFID alone as a
+login session.
 """
 from __future__ import annotations
 
@@ -48,12 +50,18 @@ def has_cookie_key(cookie: str | None, key: str) -> bool:
     return False
 
 
-def augment_cookie_with_uifid(cookie: str | None, uifid: str | None) -> tuple[str, bool]:
-    """Append UIFID only when a real cookie exists and UIFID is absent.
+def has_login_session(cookie: str | None) -> bool:
+    return any(
+        has_cookie_key(cookie, key)
+        for key in ("sessionid", "sessionid_ss", "sid_tt", "ttwid")
+    )
 
-    A standalone UIFID is intentionally not treated as an authenticated session,
-    and UIFID_TEMP is never promoted/renamed to UIFID.
-    """
+
+def complete_browser_cookie(cookie: str | None) -> bool:
+    return has_cookie_key(cookie, "UIFID") and has_login_session(cookie)
+
+
+def augment_cookie_with_uifid(cookie: str | None, uifid: str | None) -> tuple[str, bool]:
     value = str(cookie or "").strip()
     explicit_uifid = str(uifid or "").strip()
     if not value or not explicit_uifid or has_cookie_key(value, "UIFID"):
@@ -71,8 +79,6 @@ def real_binary() -> str:
     try:
         configured_path = Path(configured).resolve()
         self_path = Path(sys.argv[0]).resolve()
-        # Protect old compose/.env values such as DOUYIN_REAL_BIN=douyin from
-        # recursively invoking this wrapper after it becomes the default command.
         if configured_path == self_path and Path(DEFAULT_REAL_DOUYIN).exists():
             return DEFAULT_REAL_DOUYIN
     except OSError:
@@ -107,6 +113,13 @@ def env_with_cookie(base: dict[str, str], cookie: str) -> dict[str, str]:
     return env
 
 
+def persisted_env(base: dict[str, str]) -> dict[str, str]:
+    env = base.copy()
+    env.pop("DOUYIN_COOKIE", None)
+    env.pop("DOUYIN_UIFID", None)
+    return env
+
+
 def main() -> int:
     args = sys.argv[1:]
     original_env = os.environ.copy()
@@ -114,81 +127,87 @@ def main() -> int:
     explicit_uifid = original_env.get("DOUYIN_UIFID", "")
     effective_cookie, augmented_uifid = augment_cookie_with_uifid(original_cookie, explicit_uifid)
     kind = task_type(args)
-    prefer_env_cookie = truthy(original_env.get("DOUYIN_DOWNLOAD_USE_ENV_COOKIE"))
+    force_env_cookie = truthy(original_env.get("DOUYIN_DOWNLOAD_USE_ENV_COOKIE"))
+    env_cookie_complete = complete_browser_cookie(effective_cookie)
 
-    # Non-aweme commands keep the existing environment behavior unchanged.
     if kind != "aweme":
         process = run_cli(args, original_env)
         emit(process)
         return int(process.returncode)
 
-    # Optional explicit override: use the environment cookie directly. If the
-    # exported cookie only had UIFID_TEMP, DOUYIN_UIFID may safely supplement it.
-    if prefer_env_cookie:
-        process = run_cli(args, env_with_cookie(original_env, effective_cookie))
-        emit(process)
-        if process.returncode != 0 and argus_uifid_failure(process.stdout, process.stderr):
+    # A complete browser cookie is the preferred auth source for aweme downloads.
+    # This is also the explicit path when DOUYIN_DOWNLOAD_USE_ENV_COOKIE=true.
+    if force_env_cookie or env_cookie_complete:
+        if env_cookie_complete:
             sys.stderr.write(
-                "\nVideoGet: Douyin rejected the environment cookie with an Argus/UIFID error. "
-                "Refresh the authenticated browser cookie/UIFID or run `douyin auth cookie-login`; "
-                "VideoGet does not bypass Douyin verification.\n"
+                "VideoGet: using authenticated DOUYIN_COOKIE for Douyin aweme download "
+                "(UIFID + login session detected).\n"
             )
-        return int(process.returncode)
+        elif force_env_cookie:
+            sys.stderr.write(
+                "VideoGet: DOUYIN_DOWNLOAD_USE_ENV_COOKIE=true; using DOUYIN_COOKIE even "
+                "though VideoGet could not verify UIFID + login-session keys locally.\n"
+            )
 
-    # Default: try the persisted CLI login without allowing a possibly stale
-    # DOUYIN_COOKIE to shadow it.
-    persisted_env = original_env.copy()
-    persisted_env.pop("DOUYIN_COOKIE", None)
-    persisted_env.pop("DOUYIN_UIFID", None)
-    first = run_cli(args, persisted_env)
+        first = run_cli(args, env_with_cookie(original_env, effective_cookie))
+        if first.returncode == 0:
+            emit(first)
+            return 0
+
+        # Only an Argus/UIFID rejection may fall back to the persisted login.
+        if argus_uifid_failure(first.stdout, first.stderr):
+            sys.stderr.write(
+                "VideoGet: environment cookie was rejected by Argus/UIFID; trying the "
+                "persisted douyin-cli login once.\n"
+            )
+            second = run_cli(args, persisted_env(original_env))
+            emit(second)
+            if second.returncode == 0:
+                return 0
+            if argus_uifid_failure(second.stdout, second.stderr):
+                sys.stderr.write(
+                    "\nVideoGet: both the browser cookie and persisted CLI session were "
+                    "rejected by Argus/UIFID checks. The cookie may be valid in the browser "
+                    "but not accepted for this signed web request/session context. Refresh "
+                    "the browser login/cookie or run `douyin auth cookie-login`; VideoGet "
+                    "does not bypass Douyin verification.\n"
+                )
+            return int(second.returncode)
+
+        emit(first)
+        return int(first.returncode)
+
+    # No complete browser cookie is available: use the persisted CLI session first.
+    first = run_cli(args, persisted_env(original_env))
     if first.returncode == 0:
         emit(first)
         return 0
 
-    # Only this precise auth failure is eligible for one fallback. We never
-    # retry generic 403s, captchas, signature errors, or other risk controls.
-    if argus_uifid_failure(first.stdout, first.stderr) and has_cookie_key(effective_cookie, "UIFID"):
+    # If we can form a complete environment cookie only via DOUYIN_UIFID, try it once.
+    if argus_uifid_failure(first.stdout, first.stderr) and complete_browser_cookie(effective_cookie):
         if augmented_uifid:
             sys.stderr.write(
-                "VideoGet: persisted Douyin session is missing UIFID; retrying once with "
-                "DOUYIN_COOKIE supplemented by DOUYIN_UIFID from the local environment.\n"
-            )
-        else:
-            sys.stderr.write(
-                "VideoGet: persisted Douyin session is missing UIFID; retrying once with "
-                "the authenticated DOUYIN_COOKIE from the local environment.\n"
+                "VideoGet: persisted session is missing UIFID; retrying once with "
+                "DOUYIN_COOKIE supplemented by DOUYIN_UIFID.\n"
             )
         second = run_cli(args, env_with_cookie(original_env, effective_cookie))
         emit(second)
-        if second.returncode == 0:
-            return 0
-        if argus_uifid_failure(second.stdout, second.stderr):
-            sys.stderr.write(
-                "\nVideoGet: both the persisted session and the environment cookie were rejected "
-                "by Argus/UIFID checks. Refresh the browser login/session and retry. "
-                "VideoGet does not bypass Douyin verification.\n"
-            )
         return int(second.returncode)
 
     emit(first)
     if argus_uifid_failure(first.stdout, first.stderr):
         if not original_cookie:
-            fallback_note = "DOUYIN_COOKIE is not configured in the container"
-        elif has_cookie_key(original_cookie, "UIFID"):
-            fallback_note = "DOUYIN_COOKIE contains UIFID but was not eligible for fallback"
-        elif explicit_uifid:
-            fallback_note = "DOUYIN_UIFID is set but could not form a usable authenticated cookie"
+            note = "DOUYIN_COOKIE is not configured in the container"
+        elif not has_cookie_key(effective_cookie, "UIFID"):
+            note = "the environment cookie has no UIFID"
+        elif not has_login_session(effective_cookie):
+            note = "the environment cookie has UIFID but no recognized login-session key"
         else:
-            fallback_note = "DOUYIN_COOKIE has no UIFID and DOUYIN_UIFID is not configured"
+            note = "the environment cookie was not considered usable"
         sys.stderr.write(
-            "\nVideoGet: Douyin rejected the persisted CLI session because UIFID/session "
-            "data is missing. %s, so no environment-cookie fallback was attempted.\n"
-            "Refresh/login to Douyin and either run:\n"
-            "  docker compose exec videoget douyin auth cookie-login\n"
-            "or put a fresh authenticated cookie in local .env as DOUYIN_COOKIE. If that browser "
-            "export contains only UIFID_TEMP, also set DOUYIN_UIFID from the same browser/session. "
-            "Never commit either value.\n"
-            % fallback_note
+            "\nVideoGet: Douyin rejected the persisted CLI session. %s. Put the fresh "
+            "authenticated browser cookie in local .env as DOUYIN_COOKIE, recreate the "
+            "container, and retry. Never commit the cookie.\n" % note
         )
     return int(first.returncode)
 
