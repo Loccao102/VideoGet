@@ -38,7 +38,10 @@ COPY --from=douyin-builder /opt/douyin/bin/douyin /usr/local/bin/douyin-real
 COPY --from=go-builder /go/bin/bili /usr/local/bin/bili
 COPY --from=go-builder /out/videoget /usr/local/bin/videoget
 COPY scripts /app/scripts
-RUN chmod +x /app/scripts/douyin_wrapper.py \
+# Windows checkouts can rewrite executable Python files to CRLF. Normalize every
+# script inside the Linux image before using shebang-based launchers.
+RUN find /app/scripts -type f -name '*.py' -exec sed -i 's/\r$//' {} + \
+    && chmod +x /app/scripts/douyin_wrapper.py \
     && ln -sf /app/scripts/douyin_wrapper.py /usr/local/bin/douyin
 
 WORKDIR /app
