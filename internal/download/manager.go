@@ -88,6 +88,7 @@ func NewManager(downloadDir string) (*Manager, error) {
 		if job.Attempts <= 0 {
 			job.Attempts = 1
 		}
+		job.Video.LocalizationMode = localize.NormalizeMode(job.Video.LocalizationMode)
 		switch job.Status {
 		case JobQueued, JobDownloading, JobLocalizing:
 			job.Status = JobQueued
@@ -133,6 +134,7 @@ func (m *Manager) Start(video model.Video) (Job, error) {
 	if video.URL == "" || video.Platform == "" {
 		return Job{}, fmt.Errorf("platform and url are required")
 	}
+	video.LocalizationMode = localize.NormalizeMode(video.LocalizationMode)
 	now := time.Now().UTC()
 	job := Job{
 		ID:        newID(),
@@ -167,6 +169,7 @@ func (m *Manager) Retry(id string) (Job, error) {
 		m.mu.Unlock()
 		return Job{}, fmt.Errorf("job is already complete")
 	}
+	job.Video.LocalizationMode = localize.NormalizeMode(job.Video.LocalizationMode)
 	job.Status = JobQueued
 	job.Error = ""
 	job.Localization = nil
@@ -308,7 +311,7 @@ func (m *Manager) run(id string) {
 		job.UpdatedAt = time.Now().UTC()
 	})
 
-	result, err := m.localizer.Process(ctx, sourceOutput)
+	result, err := m.localizer.ProcessMode(ctx, sourceOutput, job.Video.LocalizationMode)
 	if err != nil {
 		m.update(id, func(job *Job) {
 			job.Status = JobLocalizationFailed
