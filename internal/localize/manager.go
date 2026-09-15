@@ -17,12 +17,27 @@ import (
 	"time"
 )
 
+const (
+	ModeSubtitlesTTS  = "subtitles_tts"
+	ModeSubtitlesOnly = "subtitles_only"
+)
+
+func NormalizeMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case ModeSubtitlesOnly, "subtitles", "sub_only", "subtitle_only":
+		return ModeSubtitlesOnly
+	default:
+		return ModeSubtitlesTTS
+	}
+}
+
 type Result struct {
 	OriginalSubtitle    string             `json:"originalSubtitle,omitempty"`
 	VietnameseSubtitle string             `json:"vietnameseSubtitle,omitempty"`
 	VoiceTrack          string             `json:"voiceTrack,omitempty"`
 	OutputVideo         string             `json:"outputVideo,omitempty"`
 	DetectedLanguage    string             `json:"detectedLanguage,omitempty"`
+	LocalizationMode    string             `json:"localizationMode,omitempty"`
 	Segments            int                `json:"segments,omitempty"`
 	SkippedReason       string             `json:"skippedReason,omitempty"`
 	Timings             map[string]float64 `json:"timings,omitempty"`
@@ -42,14 +57,14 @@ type Processor struct {
 	workerScript       string
 	workerStartTimeout time.Duration
 
-	workerReqMu sync.Mutex
-	workerState sync.RWMutex
-	workerCmd   *exec.Cmd
-	workerIn    io.WriteCloser
-	workerOut   *bufio.Reader
-	workerInfo  map[string]any
-	workerSince time.Time
-	workerStarts int64
+	workerReqMu    sync.Mutex
+	workerState    sync.RWMutex
+	workerCmd      *exec.Cmd
+	workerIn       io.WriteCloser
+	workerOut      *bufio.Reader
+	workerInfo     map[string]any
+	workerSince    time.Time
+	workerStarts   int64
 	workerRequests int64
 }
 
@@ -189,8 +204,13 @@ func (p *Processor) Close() error {
 }
 
 func (p *Processor) Process(ctx context.Context, input string) (Result, error) {
+	return p.ProcessMode(ctx, input, ModeSubtitlesTTS)
+}
+
+func (p *Processor) ProcessMode(ctx context.Context, input, mode string) (Result, error) {
+	mode = NormalizeMode(mode)
 	if !p.Enabled() {
-		return Result{OutputVideo: input}, nil
+		return Result{OutputVideo: input, LocalizationMode: mode}, nil
 	}
 	if err := p.Available(); err != nil {
 		return Result{}, err
@@ -215,7 +235,7 @@ func (p *Processor) Process(ctx context.Context, input string) (Result, error) {
 	}
 
 	if p.workerEnabled {
-		result, err := p.processWorker(ctx, input, outputDir)
+		result, err := p.processWorker(ctx, input, outputDir, mode)
 		if err == nil {
 			return validateResult(result)
 		}
@@ -228,7 +248,7 @@ func (p *Processor) Process(ctx context.Context, input string) (Result, error) {
 		log.Printf("persistent localization worker unavailable, using one-shot fallback: %v", err)
 	}
 
-	return p.processScript(ctx, input, outputDir)
+	return p.processScript(ctx, input, outputDir, mode)
 }
 
 type workerJobError struct{ message string }
@@ -239,6 +259,7 @@ type workerRequest struct {
 	ID        string `json:"id"`
 	Input     string `json:"input"`
 	OutputDir string `json:"outputDir"`
+	Mode      string `json:"mode,omitempty"`
 }
 
 type workerResponse struct {
@@ -248,7 +269,7 @@ type workerResponse struct {
 	Error  string `json:"error"`
 }
 
-func (p *Processor) processWorker(ctx context.Context, input, outputDir string) (Result, error) {
+func (p *Processor) processWorker(ctx context.Context, input, outputDir, mode string) (Result, error) {
 	p.workerReqMu.Lock()
 	defer p.workerReqMu.Unlock()
 
@@ -260,6 +281,7 @@ func (p *Processor) processWorker(ctx context.Context, input, outputDir string) 
 		ID:        strconv.FormatInt(time.Now().UnixNano(), 10),
 		Input:     input,
 		OutputDir: outputDir,
+		Mode:      NormalizeMode(mode),
 	}
 	payload, err := json.Marshal(request)
 	if err != nil {
@@ -414,10 +436,11 @@ func readLineContext(ctx context.Context, reader *bufio.Reader) (string, error) 
 	}
 }
 
-func (p *Processor) processScript(ctx context.Context, input, outputDir string) (Result, error) {
+func (p *Processor) processScript(ctx context.Context, input, outputDir, mode string) (Result, error) {
 	cmd := exec.CommandContext(ctx, p.python, p.script,
 		"--input", input,
 		"--output-dir", outputDir,
+		"--mode", NormalizeMode(mode),
 	)
 	cmd.Env = os.Environ()
 	var stdout, stderr bytes.Buffer
@@ -442,6 +465,7 @@ func validateResult(result Result) (Result, error) {
 	if result.OutputVideo == "" {
 		return Result{}, fmt.Errorf("localization finished without output video")
 	}
+	result.LocalizationMode = NormalizeMode(result.LocalizationMode)
 	return result, nil
 }
 
