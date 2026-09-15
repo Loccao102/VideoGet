@@ -1,0 +1,6 @@
+# Keep Linux-executed scripts in LF even when the repo is checked out on Windows.
+*.py text eol=lf
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
