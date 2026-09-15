@@ -34,11 +34,12 @@ RUN pip install --no-cache-dir \
     pydub \
     opencv-python-headless
 
-COPY --from=douyin-builder /opt/douyin/bin/douyin /usr/local/bin/douyin
+COPY --from=douyin-builder /opt/douyin/bin/douyin /usr/local/bin/douyin-real
 COPY --from=go-builder /go/bin/bili /usr/local/bin/bili
 COPY --from=go-builder /out/videoget /usr/local/bin/videoget
 COPY scripts /app/scripts
-RUN chmod +x /app/scripts/douyin_wrapper.py
+RUN chmod +x /app/scripts/douyin_wrapper.py \
+    && ln -sf /app/scripts/douyin_wrapper.py /usr/local/bin/douyin
 
 WORKDIR /app
 RUN mkdir -p /app/downloads /root/.cache /root/.config/douyin-cli
@@ -50,8 +51,8 @@ ENV PYTHONUNBUFFERED=1 \
     DOWNLOAD_CONCURRENCY=3 \
     JOB_TIMEOUT_MINUTES=180 \
     DOUYIN_MODE=auto \
-    DOUYIN_BIN=/app/scripts/douyin_wrapper.py \
-    DOUYIN_REAL_BIN=/usr/local/bin/douyin \
+    DOUYIN_BIN=douyin \
+    DOUYIN_REAL_BIN=/usr/local/bin/douyin-real \
     DOUYIN_DOWNLOAD_USE_ENV_COOKIE=false \
     DOUYIN_GUEST_CLI_TIMEOUT_SEC=18 \
     DOUYIN_GUEST_TIMEOUT_SEC=20 \
