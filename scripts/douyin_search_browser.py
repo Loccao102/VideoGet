@@ -127,7 +127,7 @@ async def wait_for_target(session: aiohttp.ClientSession, port: int, timeout: fl
                 for target in targets:
                     if target.get("type") == "page" and target.get("webSocketDebuggerUrl"):
                         return target
-        except Exception as exc:  # browser can take a moment to expose CDP
+        except Exception as exc:
             last_error = exc
         await asyncio.sleep(0.2)
     raise RuntimeError(f"Chromium CDP target did not appear: {last_error or 'timeout'}")
@@ -177,7 +177,7 @@ async def capture(args: argparse.Namespace) -> dict[str, Any]:
             async with session.ws_connect(
                 target["webSocketDebuggerUrl"],
                 origin="http://127.0.0.1",
-                timeout=aiohttp.ClientTimeout(total=10),
+                timeout=10.0,
                 max_msg_size=64 * 1024 * 1024,
             ) as ws:
                 cdp = CDP(ws)
@@ -190,7 +190,8 @@ async def capture(args: argparse.Namespace) -> dict[str, Any]:
                     if user_agent:
                         await cdp.command("Network.setUserAgentOverride", {"userAgent": user_agent})
 
-                    for name, value in parse_cookie_header(os.getenv("DOUYIN_COOKIE", "")):
+                    cookie_pairs = parse_cookie_header(os.getenv("DOUYIN_COOKIE", ""))
+                    for name, value in cookie_pairs:
                         result = await cdp.command(
                             "Network.setCookie",
                             {
@@ -199,7 +200,6 @@ async def capture(args: argparse.Namespace) -> dict[str, Any]:
                                 "domain": ".douyin.com",
                                 "path": "/",
                                 "secure": True,
-                                "sameSite": "None",
                             },
                         )
                         if result.get("success") is False:
@@ -210,7 +210,8 @@ async def capture(args: argparse.Namespace) -> dict[str, Any]:
                     await cdp.command("Page.navigate", {"url": page_url})
 
                     api_bodies: list[str] = []
-                    seen_requests: set[str] = set()
+                    target_requests: set[str] = set()
+                    completed_requests: set[str] = set()
                     deadline = time.monotonic() + args.render_seconds
                     next_scroll = time.monotonic() + 3.0
                     scrolls = 0
@@ -224,22 +225,31 @@ async def capture(args: argparse.Namespace) -> dict[str, Any]:
                         except asyncio.TimeoutError:
                             event = None
 
-                        if event and event.get("method") == "Network.responseReceived":
+                        if event:
+                            method = event.get("method")
                             params = event.get("params") or {}
-                            response = params.get("response") or {}
-                            response_url = str(response.get("url") or "")
-                            request_id = str(params.get("requestId") or "")
-                            if SEARCH_ENDPOINT in response_url and request_id and request_id not in seen_requests:
-                                seen_requests.add(request_id)
-                                try:
-                                    body_result = await cdp.command("Network.getResponseBody", {"requestId": request_id})
-                                    body = str(body_result.get("body") or "")
-                                    if body_result.get("base64Encoded"):
-                                        body = base64.b64decode(body).decode("utf-8", errors="replace")
-                                    if body:
-                                        api_bodies.append(body)
-                                except Exception as exc:
-                                    print(f"warning: could not read Douyin search response: {exc}", file=sys.stderr)
+                            if method == "Network.responseReceived":
+                                response = params.get("response") or {}
+                                response_url = str(response.get("url") or "")
+                                request_id = str(params.get("requestId") or "")
+                                if SEARCH_ENDPOINT in response_url and request_id:
+                                    target_requests.add(request_id)
+                            elif method == "Network.loadingFinished":
+                                request_id = str(params.get("requestId") or "")
+                                if request_id in target_requests and request_id not in completed_requests:
+                                    completed_requests.add(request_id)
+                                    try:
+                                        body_result = await cdp.command("Network.getResponseBody", {"requestId": request_id})
+                                        body = str(body_result.get("body") or "")
+                                        if body_result.get("base64Encoded"):
+                                            body = base64.b64decode(body).decode("utf-8", errors="replace")
+                                        if body:
+                                            api_bodies.append(body)
+                                    except Exception as exc:
+                                        print(f"warning: could not read Douyin search response: {exc}", file=sys.stderr)
+                            elif method == "Network.loadingFailed":
+                                request_id = str(params.get("requestId") or "")
+                                target_requests.discard(request_id)
 
                         now = time.monotonic()
                         if now >= next_scroll and scrolls < args.scrolls:
@@ -279,7 +289,7 @@ async def capture(args: argparse.Namespace) -> dict[str, Any]:
                         "dom": dom,
                         "finalUrl": final_url,
                         "title": title,
-                        "cookieCount": len(parse_cookie_header(os.getenv("DOUYIN_COOKIE", ""))),
+                        "cookieCount": len(cookie_pairs),
                     }
                 finally:
                     await cdp.close()
