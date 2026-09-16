@@ -212,10 +212,3 @@ func douyinSearchTimeout() time.Duration {
 	}
 	return 20 * time.Second
 }
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
