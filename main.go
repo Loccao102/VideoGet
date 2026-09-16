@@ -24,7 +24,13 @@ func main() {
 	if err != nil {
 		log.Fatalf("load embedded web UI: %v", err)
 	}
-	providers := []source.Provider{source.NewBilibiliProvider(), source.NewDouyinProvider()}
+
+	// Douyin uses a browser-backed discovery path. Keep a hard outer budget so
+	// process cleanup/profile-lock issues can never leave /api/search waiting
+	// forever. The HTTP search layer has a 75s source budget; 55s leaves enough
+	// time to aggregate and return a structured error to the UI.
+	douyin := source.WithSearchTimeout(source.NewDouyinProvider(), 55*time.Second)
+	providers := []source.Provider{source.NewBilibiliProvider(), douyin}
 	providers = append(providers, source.NewPublicShortProviders()...)
 	jobs, err := download.NewManager(downloadDir)
 	if err != nil {
