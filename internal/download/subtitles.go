@@ -133,8 +133,16 @@ func (m *Manager) runSubtitleRender(id string) {
 		revision = 1
 	}
 	outputDir := filepath.Join(filepath.Dir(job.SourceOutput), "localized")
-	output := filepath.Join(outputDir, fmt.Sprintf("%s.vi-subbed-r%d.mp4", strings.TrimSuffix(filepath.Base(job.SourceOutput), filepath.Ext(job.SourceOutput)), revision))
-	if err := m.localizer.RenderSubtitles(ctx, job.SourceOutput, subtitle, output); err != nil {
+	stem := strings.TrimSuffix(filepath.Base(job.SourceOutput), filepath.Ext(job.SourceOutput))
+	var output string
+	if job.ProcessingMode == ProcessingOCRMusic {
+		output = filepath.Join(outputDir, fmt.Sprintf("%s.ocr-music-r%d.mp4", stem, revision))
+		err = m.localizer.RenderOCRMusicSubtitles(ctx, job.SourceOutput, subtitle, output)
+	} else {
+		output = filepath.Join(outputDir, fmt.Sprintf("%s.vi-subbed-r%d.mp4", stem, revision))
+		err = m.localizer.RenderSubtitles(ctx, job.SourceOutput, subtitle, output)
+	}
+	if err != nil {
 		m.fail(id, JobLocalizationFailed, err)
 		return
 	}
