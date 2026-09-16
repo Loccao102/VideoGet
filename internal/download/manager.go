@@ -24,22 +24,31 @@ const (
 	JobQueued             JobStatus = "queued"
 	JobDownloading        JobStatus = "downloading"
 	JobLocalizing         JobStatus = "localizing"
+	JobRendering          JobStatus = "rendering"
 	JobDone               JobStatus = "done"
 	JobFailed             JobStatus = "failed"
 	JobLocalizationFailed JobStatus = "localization_failed"
 )
 
+const (
+	ProcessingDownload  = "download"
+	ProcessingSubtitles = "subtitles"
+	ProcessingDub       = "dub"
+)
+
 type Job struct {
-	ID           string           `json:"id"`
-	Status       JobStatus        `json:"status"`
-	Video        model.Video      `json:"video"`
-	SourceOutput string           `json:"sourceOutput,omitempty"`
-	Output       string           `json:"output,omitempty"`
-	Localization *localize.Result `json:"localization,omitempty"`
-	Error        string           `json:"error,omitempty"`
-	Attempts     int              `json:"attempts"`
-	CreatedAt    time.Time        `json:"createdAt"`
-	UpdatedAt    time.Time        `json:"updatedAt"`
+	ID               string           `json:"id"`
+	Status           JobStatus        `json:"status"`
+	Video            model.Video      `json:"video"`
+	ProcessingMode   string           `json:"processingMode"`
+	SubtitleRevision int              `json:"subtitleRevision,omitempty"`
+	SourceOutput     string           `json:"sourceOutput,omitempty"`
+	Output           string           `json:"output,omitempty"`
+	Localization     *localize.Result `json:"localization,omitempty"`
+	Error            string           `json:"error,omitempty"`
+	Attempts         int              `json:"attempts"`
+	CreatedAt        time.Time        `json:"createdAt"`
+	UpdatedAt        time.Time        `json:"updatedAt"`
 }
 
 type Manager struct {
@@ -88,8 +97,9 @@ func NewManager(downloadDir string) (*Manager, error) {
 		if job.Attempts <= 0 {
 			job.Attempts = 1
 		}
+		job.ProcessingMode = normalizeProcessingMode(job.ProcessingMode)
 		switch job.Status {
-		case JobQueued, JobDownloading, JobLocalizing:
+		case JobQueued, JobDownloading, JobLocalizing, JobRendering:
 			job.Status = JobQueued
 			job.UpdatedAt = time.Now().UTC()
 			resume = append(resume, job.ID)
@@ -129,18 +139,28 @@ func (m *Manager) Close() error {
 	return firstErr
 }
 
+// Start preserves the legacy behavior for callers that do not specify a mode.
 func (m *Manager) Start(video model.Video) (Job, error) {
+	return m.StartWithMode(video, ProcessingDub)
+}
+
+func (m *Manager) StartWithMode(video model.Video, mode string) (Job, error) {
 	if video.URL == "" || video.Platform == "" {
 		return Job{}, fmt.Errorf("platform and url are required")
 	}
+	mode, err := validateProcessingMode(mode)
+	if err != nil {
+		return Job{}, err
+	}
 	now := time.Now().UTC()
 	job := Job{
-		ID:        newID(),
-		Status:    JobQueued,
-		Video:     video,
-		Attempts:  1,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:             newID(),
+		Status:         JobQueued,
+		Video:          video,
+		ProcessingMode: mode,
+		Attempts:       1,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
 	if err := m.store.Upsert(job); err != nil {
 		return Job{}, err
@@ -160,7 +180,7 @@ func (m *Manager) Retry(id string) (Job, error) {
 		return Job{}, fmt.Errorf("job not found")
 	}
 	switch job.Status {
-	case JobQueued, JobDownloading, JobLocalizing:
+	case JobQueued, JobDownloading, JobLocalizing, JobRendering:
 		m.mu.Unlock()
 		return Job{}, fmt.Errorf("job is already running")
 	case JobDone:
@@ -238,6 +258,7 @@ func (m *Manager) run(id string) {
 	if !ok {
 		return
 	}
+	job.ProcessingMode = normalizeProcessingMode(job.ProcessingMode)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(envPositiveInt("JOB_TIMEOUT_MINUTES", 180))*time.Minute)
 	activeState, active := m.registerActiveJob(id, cancel)
@@ -293,9 +314,20 @@ func (m *Manager) run(id string) {
 		})
 	}
 
-	if m.localizer == nil || !m.localizer.Enabled() {
+	if job.ProcessingMode == ProcessingDownload {
 		m.update(id, func(job *Job) {
 			job.Status = JobDone
+			job.Output = sourceOutput
+			job.Error = ""
+			job.UpdatedAt = time.Now().UTC()
+		})
+		return
+	}
+
+	if m.localizer == nil || !m.localizer.Enabled() {
+		m.update(id, func(job *Job) {
+			job.Status = JobLocalizationFailed
+			job.Error = "localization is disabled but this job requires subtitle processing"
 			job.Output = sourceOutput
 			job.UpdatedAt = time.Now().UTC()
 		})
@@ -308,7 +340,7 @@ func (m *Manager) run(id string) {
 		job.UpdatedAt = time.Now().UTC()
 	})
 
-	result, err := m.localizer.Process(ctx, sourceOutput)
+	result, err := m.localizer.ProcessMode(ctx, sourceOutput, job.ProcessingMode)
 	if err != nil {
 		m.update(id, func(job *Job) {
 			job.Status = JobLocalizationFailed
@@ -360,6 +392,27 @@ func (m *Manager) download(ctx context.Context, video model.Video, outputDir str
 		}
 		return "", fmt.Errorf("unsupported platform %q", video.Platform)
 	}
+}
+
+func validateProcessingMode(mode string) (string, error) {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" {
+		mode = ProcessingDub
+	}
+	switch mode {
+	case ProcessingDownload, ProcessingSubtitles, ProcessingDub:
+		return mode, nil
+	default:
+		return "", fmt.Errorf("processing mode must be download, subtitles, or dub")
+	}
+}
+
+func normalizeProcessingMode(mode string) string {
+	mode, err := validateProcessingMode(mode)
+	if err != nil {
+		return ProcessingDub
+	}
+	return mode
 }
 
 func envPositiveInt(name string, fallback int) int {
