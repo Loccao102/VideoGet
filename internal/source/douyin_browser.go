@@ -3,6 +3,7 @@ package source
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"html"
 	"net/url"
@@ -35,6 +36,45 @@ var (
 	douyinDurationPattern     = regexp.MustCompile(`(?i)["']duration["']\s*:\s*([0-9]+)`)
 )
 
+type douyinBrowserSearchPayload struct {
+	APIBodies   []string `json:"apiBodies"`
+	DOM         string   `json:"dom"`
+	FinalURL    string   `json:"finalUrl"`
+	Title       string   `json:"title"`
+	CookieCount int      `json:"cookieCount"`
+	Error       string   `json:"error"`
+}
+
+type douyinNativeSearchResponse struct {
+	StatusCode int    `json:"status_code"`
+	StatusMsg  string `json:"status_msg"`
+	Data       []struct {
+		Type      int                `json:"type"`
+		AwemeInfo *douyinNativeAweme `json:"aweme_info"`
+	} `json:"data"`
+}
+
+type douyinNativeAweme struct {
+	AwemeID    string `json:"aweme_id"`
+	Desc       string `json:"desc"`
+	CreateTime int64  `json:"create_time"`
+	Author     struct {
+		Nickname string `json:"nickname"`
+	} `json:"author"`
+	Statistics struct {
+		PlayCount    int64 `json:"play_count"`
+		DiggCount    int64 `json:"digg_count"`
+		CommentCount int64 `json:"comment_count"`
+		ShareCount   int64 `json:"share_count"`
+	} `json:"statistics"`
+	Video struct {
+		Duration int64 `json:"duration"`
+		Cover    struct {
+			URLList []string `json:"url_list"`
+		} `json:"cover"`
+	} `json:"video"`
+}
+
 func (p *DouyinProvider) searchNativeBrowser(ctx context.Context, keyword string, limit int) ([]model.Video, error) {
 	if limit <= 0 {
 		limit = 10
@@ -43,15 +83,208 @@ func (p *DouyinProvider) searchNativeBrowser(ctx context.Context, keyword string
 		limit = 50
 	}
 
-	document, err := fetchDouyinSearchDOM(ctx, keyword)
+	payload, helperErr := fetchDouyinSearchPayload(ctx, keyword)
+	if helperErr == nil {
+		results, apiErr := parseDouyinSearchAPIBodies(payload.APIBodies, keyword, limit)
+		if len(results) > 0 {
+			return results, nil
+		}
+		if apiErr != nil {
+			return nil, apiErr
+		}
+		if payload.DOM != "" {
+			results = parseDouyinSearchDOM(payload.DOM, keyword, limit)
+			if len(results) > 0 {
+				return results, nil
+			}
+		}
+		if payload.CookieCount == 0 && strings.TrimSpace(os.Getenv("DOUYIN_NATIVE_SEARCH_PROFILE_DIR")) == "" && strings.TrimSpace(os.Getenv("DOUYIN_BROWSER_PROFILE_DIR")) == "" {
+			return nil, fmt.Errorf("native Douyin search requires an authenticated session; set DOUYIN_COOKIE or DOUYIN_NATIVE_SEARCH_PROFILE_DIR")
+		}
+		return nil, fmt.Errorf("native Douyin search rendered %q (%s) but returned no search API results for %q", payload.Title, payload.FinalURL, keyword)
+	}
+
+	// Keep the older DOM-only path as a compatibility fallback for local installs
+	// that have Chromium but do not have the Python/aiohttp helper available.
+	document, domErr := fetchDouyinSearchDOM(ctx, keyword)
+	if domErr == nil {
+		results := parseDouyinSearchDOM(document, keyword, limit)
+		if len(results) > 0 {
+			return results, nil
+		}
+	}
+	if domErr != nil {
+		return nil, fmt.Errorf("native Douyin CDP search failed: %v | DOM fallback failed: %v", helperErr, domErr)
+	}
+	return nil, fmt.Errorf("native Douyin CDP search failed: %v | DOM fallback returned no video results", helperErr)
+}
+
+func fetchDouyinSearchPayload(ctx context.Context, keyword string) (douyinBrowserSearchPayload, error) {
+	var payload douyinBrowserSearchPayload
+	browser, err := findDouyinSearchBrowserBinary()
 	if err != nil {
-		return nil, err
+		return payload, err
 	}
-	results := parseDouyinSearchDOM(document, keyword, limit)
-	if len(results) == 0 {
-		return nil, fmt.Errorf("native Douyin browser search returned no video results for %q", keyword)
+	python, err := findDouyinSearchPython()
+	if err != nil {
+		return payload, err
 	}
-	return results, nil
+	script, err := findDouyinSearchScript()
+	if err != nil {
+		return payload, err
+	}
+
+	douyinNativeSearchMu.Lock()
+	defer douyinNativeSearchMu.Unlock()
+
+	timeout := envSeconds("DOUYIN_NATIVE_SEARCH_TIMEOUT_SEC", 45)
+	requestCtx, cancel := context.WithTimeout(ctx, timeout+5*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(requestCtx, python, script, "--keyword", keyword, "--browser-bin", browser)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		_ = json.Unmarshal(stdout.Bytes(), &payload)
+		message := strings.TrimSpace(payload.Error)
+		if message == "" {
+			message = strings.TrimSpace(stderr.String())
+		}
+		if len(message) > 1000 {
+			message = message[len(message)-1000:]
+		}
+		if requestCtx.Err() != nil {
+			return payload, fmt.Errorf("native Douyin CDP helper timed out after %s", timeout)
+		}
+		if message != "" {
+			return payload, fmt.Errorf("native Douyin CDP helper failed: %w: %s", err, message)
+		}
+		return payload, fmt.Errorf("native Douyin CDP helper failed: %w", err)
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		return payload, fmt.Errorf("decode native Douyin CDP helper output: %w", err)
+	}
+	if strings.TrimSpace(payload.Error) != "" {
+		return payload, fmt.Errorf("native Douyin CDP helper: %s", payload.Error)
+	}
+	return payload, nil
+}
+
+func parseDouyinSearchAPIBodies(bodies []string, keyword string, limit int) ([]model.Video, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	seen := make(map[string]struct{})
+	results := make([]model.Video, 0, limit)
+	loginRequired := false
+	var statusErrors []string
+
+	for _, body := range bodies {
+		body = strings.TrimSpace(body)
+		if body == "" {
+			continue
+		}
+		var response douyinNativeSearchResponse
+		if err := json.Unmarshal([]byte(body), &response); err != nil {
+			continue
+		}
+		if response.StatusCode == 2483 {
+			loginRequired = true
+			continue
+		}
+		if response.StatusCode != 0 {
+			statusErrors = append(statusErrors, fmt.Sprintf("status %d: %s", response.StatusCode, strings.TrimSpace(response.StatusMsg)))
+			continue
+		}
+		for _, item := range response.Data {
+			aweme := item.AwemeInfo
+			if aweme == nil || strings.TrimSpace(aweme.AwemeID) == "" {
+				continue
+			}
+			id := strings.TrimSpace(aweme.AwemeID)
+			if _, exists := seen[id]; exists {
+				continue
+			}
+			seen[id] = struct{}{}
+			video := model.Video{
+				ID:           id,
+				Platform:     "douyin",
+				Title:        strings.TrimSpace(aweme.Desc),
+				Author:       strings.TrimSpace(aweme.Author.Nickname),
+				URL:          "https://www.douyin.com/video/" + id,
+				MediaType:    "video",
+				Views:        aweme.Statistics.PlayCount,
+				Likes:        aweme.Statistics.DiggCount,
+				Comments:     aweme.Statistics.CommentCount,
+				Shares:       aweme.Statistics.ShareCount,
+				SearchSource: keyword,
+			}
+			if video.Title == "" {
+				video.Title = "Douyin search: " + keyword
+			}
+			if aweme.CreateTime > 0 {
+				published := time.Unix(aweme.CreateTime, 0).UTC()
+				video.PublishedAt = &published
+			}
+			if aweme.Video.Duration > 0 {
+				duration := aweme.Video.Duration
+				if duration >= 1000 {
+					duration /= 1000
+				}
+				video.DurationSec = duration
+			}
+			if len(aweme.Video.Cover.URLList) > 0 {
+				video.Thumbnail = aweme.Video.Cover.URLList[0]
+			}
+			results = append(results, video)
+			if len(results) >= limit {
+				return results, nil
+			}
+		}
+	}
+
+	if len(results) > 0 {
+		return results, nil
+	}
+	if loginRequired {
+		return nil, fmt.Errorf("Douyin native search requires a logged-in DOUYIN_COOKIE (status 2483: 请先登录，再继续搜索吧)")
+	}
+	if len(statusErrors) > 0 {
+		return nil, fmt.Errorf("Douyin native search API returned %s", strings.Join(statusErrors, " | "))
+	}
+	return nil, nil
+}
+
+func findDouyinSearchPython() (string, error) {
+	if configured := strings.TrimSpace(os.Getenv("DOUYIN_BROWSER_PYTHON")); configured != "" {
+		if found, err := exec.LookPath(configured); err == nil {
+			return found, nil
+		}
+		return "", fmt.Errorf("DOUYIN_BROWSER_PYTHON %q was not found", configured)
+	}
+	for _, candidate := range []string{"python3", "python"} {
+		if found, err := exec.LookPath(candidate); err == nil {
+			return found, nil
+		}
+	}
+	return "", fmt.Errorf("python was not found for native Douyin CDP search")
+}
+
+func findDouyinSearchScript() (string, error) {
+	if configured := strings.TrimSpace(os.Getenv("DOUYIN_NATIVE_SEARCH_SCRIPT")); configured != "" {
+		if info, err := os.Stat(configured); err == nil && !info.IsDir() {
+			return configured, nil
+		}
+		return "", fmt.Errorf("DOUYIN_NATIVE_SEARCH_SCRIPT %q was not found", configured)
+	}
+	for _, candidate := range []string{"/app/scripts/douyin_search_browser.py", "scripts/douyin_search_browser.py"} {
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("native Douyin CDP helper script was not found")
 }
 
 func fetchDouyinSearchDOM(ctx context.Context, keyword string) (string, error) {
@@ -60,9 +293,8 @@ func fetchDouyinSearchDOM(ctx context.Context, keyword string) (string, error) {
 		return "", err
 	}
 
-	// Chrome profiles do not support concurrent writers reliably. Serializing only
-	// the native fallback keeps expanded-keyword searches predictable and avoids
-	// profile lock errors while the public-index fast path remains concurrent.
+	// Chrome profiles do not support concurrent writers reliably. The CDP path
+	// serializes separately; this lock remains for the compatibility fallback.
 	douyinNativeSearchMu.Lock()
 	defer douyinNativeSearchMu.Unlock()
 
