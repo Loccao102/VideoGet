@@ -37,6 +37,9 @@ self.__pace_f.push([1,"{\"aweme_id\":\"7654321098765432102\",\"desc\":\"第二�
 	if first.SearchSource != "无线吸尘器" {
 		t.Fatalf("SearchSource = %q", first.SearchSource)
 	}
+	if results[1].ID != "7654321098765432102" {
+		t.Fatalf("hydrated result ID = %q", results[1].ID)
+	}
 }
 
 func TestEnrichDouyinNativeResultReadsNearbyMetadata(t *testing.T) {
