@@ -17,7 +17,7 @@ const (
 )
 
 // ProcessMode keeps the existing persistent worker for full dubbing jobs and
-// uses the one-shot smart script for subtitle-only jobs so TTS is never invoked.
+// uses a dedicated one-shot script for subtitle-only jobs so TTS is never invoked.
 func (p *Processor) ProcessMode(ctx context.Context, input, mode string) (Result, error) {
 	mode = strings.ToLower(strings.TrimSpace(mode))
 	if mode == "" || mode == ModeDub {
@@ -29,14 +29,28 @@ func (p *Processor) ProcessMode(ctx context.Context, input, mode string) (Result
 	if !p.Enabled() {
 		return Result{OutputVideo: input}, nil
 	}
-	if err := p.Available(); err != nil {
-		return Result{}, err
+	if _, err := exec.LookPath(p.python); err != nil {
+		return Result{}, fmt.Errorf("python runtime not found: %w", err)
+	}
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		return Result{}, fmt.Errorf("ffmpeg not found: %w", err)
 	}
 	if strings.TrimSpace(input) == "" {
 		return Result{}, fmt.Errorf("input video path is required")
 	}
 	if _, err := os.Stat(input); err != nil {
 		return Result{}, fmt.Errorf("input video does not exist: %w", err)
+	}
+
+	script := strings.TrimSpace(os.Getenv("SUBTITLE_LOCALIZE_SCRIPT"))
+	if script == "" {
+		script = firstExisting(
+			"/app/scripts/localize_subtitles.py",
+			filepath.FromSlash("scripts/localize_subtitles.py"),
+		)
+	}
+	if script == "" {
+		return Result{}, fmt.Errorf("subtitle localization script not found")
 	}
 
 	select {
@@ -51,10 +65,9 @@ func (p *Processor) ProcessMode(ctx context.Context, input, mode string) (Result
 		return Result{}, fmt.Errorf("create localization output directory: %w", err)
 	}
 
-	cmd := exec.CommandContext(ctx, p.python, p.script,
+	cmd := exec.CommandContext(ctx, p.python, script,
 		"--input", input,
 		"--output-dir", outputDir,
-		"--mode", ModeSubtitles,
 	)
 	cmd.Env = os.Environ()
 	var stdout, stderr bytes.Buffer
