@@ -24,9 +24,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         fonts-noto-color-emoji
 
 # yt-dlp remains for the existing Bilibili/public-source branches. Douyin no longer calls it.
-# Chromium is used only for Douyin native-search/browser fallback paths.
+# Chromium + aiohttp are used by the Douyin native-search CDP helper/browser fallback paths.
 RUN pip install --no-cache-dir \
     yt-dlp==2026.8.19 \
+    aiohttp \
     faster-whisper \
     edge-tts==7.2.8 \
     pydub \
@@ -47,8 +48,11 @@ ENV PYTHONUNBUFFERED=1 \
     JOB_TIMEOUT_MINUTES=180 \
     DOUYIN_SEARCH_TIMEOUT_SEC=20 \
     DOUYIN_NATIVE_SEARCH=true \
+    DOUYIN_NATIVE_SEARCH_SCRIPT=/app/scripts/douyin_search_browser.py \
     DOUYIN_NATIVE_SEARCH_TIMEOUT_SEC=45 \
     DOUYIN_NATIVE_SEARCH_RENDER_MS=12000 \
+    DOUYIN_NATIVE_SEARCH_SCROLLS=4 \
+    DOUYIN_NATIVE_SEARCH_MAX_PAGES=5 \
     DOUYIN_NATIVE_SEARCH_DOM_MAX_MB=32 \
     DOUYIN_RESOLVE_TIMEOUT_SEC=18 \
     DOUYIN_PAGE_TIMEOUT_SEC=25 \
@@ -94,6 +98,7 @@ ENV PYTHONUNBUFFERED=1 \
     OLLAMA_BASE_URL=http://host.docker.internal:11434 \
     OLLAMA_MODEL=qwen3:8b \
     OLLAMA_KEEP_ALIVE=15m \
+    KEYWORD_EXPANDER_STRICT=false \
     TTS_VOICE=vi-VN-HoaiMyNeural \
     TTS_RATE=+8% \
     TTS_CONCURRENCY=2 \
