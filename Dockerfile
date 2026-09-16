@@ -25,20 +25,24 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 # yt-dlp remains for the existing Bilibili/public-source branches. Douyin no longer calls it.
 # Chromium + aiohttp are used by the Douyin native-search CDP helper/browser fallback paths.
+# RapidOCR + ONNX Runtime power the CPU-local OCR+Music mode without PaddlePaddle/CUDA.
 RUN pip install --no-cache-dir \
     yt-dlp==2026.8.19 \
     aiohttp \
     faster-whisper \
     edge-tts==7.2.8 \
     pydub \
-    opencv-python-headless
+    opencv-python-headless \
+    'rapidocr>=3.9.0,<4' \
+    onnxruntime
 
 COPY --from=go-builder /go/bin/bili /usr/local/bin/bili
 COPY --from=go-builder /out/videoget /usr/local/bin/videoget
 COPY scripts /app/scripts
+COPY assets /app/assets
 
 WORKDIR /app
-RUN mkdir -p /app/downloads /root/.cache
+RUN mkdir -p /app/downloads /app/assets/music /root/.cache
 
 ENV PYTHONUNBUFFERED=1 \
     ADDR=:8080 \
@@ -79,6 +83,29 @@ ENV PYTHONUNBUFFERED=1 \
     LOCALIZE_WORKER_FALLBACK=true \
     LOCALIZE_WORKER_PREWARM=true \
     LOCALIZE_WORKER_START_TIMEOUT_SEC=600 \
+    OCR_MUSIC_SCRIPT=/app/scripts/localize_ocr_music.py \
+    OCR_MODEL_SIZE=small \
+    OCR_FPS=3 \
+    OCR_MAX_SAMPLES=900 \
+    OCR_MIN_CONFIDENCE=0.65 \
+    OCR_MIN_TEXT_CHARS=2 \
+    OCR_MIN_DURATION_SEC=0.35 \
+    OCR_TEXT_SIMILARITY=0.78 \
+    OCR_MAX_GAP_SEC=0.9 \
+    OCR_IGNORE_PERSISTENT_SEC=12 \
+    OCR_SUBTITLE_REGION=auto \
+    OCR_LAYOUT_MIN_CONFIDENCE=0.58 \
+    OCR_SOURCE_LANGUAGE=zh \
+    OCR_TRANSLATE=true \
+    OCR_REMOVE_SOURCE_TEXT=true \
+    OCR_MUSIC_DIR=/app/assets/music \
+    OCR_MUSIC_REQUIRED=true \
+    OCR_MUSIC_VOLUME=0.18 \
+    OCR_MUSIC_FADE_IN_SEC=0.8 \
+    OCR_MUSIC_FADE_OUT_SEC=1.5 \
+    OCR_ORIGINAL_AUDIO_MODE=mute \
+    OCR_ORIGINAL_AUDIO_VOLUME=0.08 \
+    OCR_MUSIC_AUDIO_BITRATE=192k \
     WHISPER_MODEL=small \
     WHISPER_DEVICE=cpu \
     WHISPER_COMPUTE_TYPE=int8 \
