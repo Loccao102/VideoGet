@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -32,7 +33,7 @@ type keywordPayload struct {
 // failure because static keyword expansion is already available. Set KEYWORD_EXPANDER_STRICT=true
 // when an Ollama failure should be surfaced to the API caller.
 func ExpandContext(ctx context.Context, keyword string) ([]string, error) {
-	fallback := Expand(keyword)
+	fallback := limitKeywords(Expand(keyword))
 	if !strings.EqualFold(strings.TrimSpace(os.Getenv("KEYWORD_EXPANDER")), "ollama") {
 		return fallback, nil
 	}
@@ -122,7 +123,31 @@ func envDiscoveryBool(name string, fallback bool) bool {
 	}
 }
 
+func keywordExpansionLimit() int {
+	value := strings.TrimSpace(os.Getenv("SEARCH_KEYWORD_LIMIT"))
+	if value == "" {
+		return 4
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		return 4
+	}
+	if parsed > 8 {
+		return 8
+	}
+	return parsed
+}
+
+func limitKeywords(values []string) []string {
+	limit := keywordExpansionLimit()
+	if len(values) <= limit {
+		return values
+	}
+	return values[:limit]
+}
+
 func mergeKeywords(original string, groups ...[]string) []string {
+	limit := keywordExpansionLimit()
 	out := []string{strings.TrimSpace(original)}
 	seen := map[string]struct{}{strings.ToLower(strings.TrimSpace(original)): {}}
 	for _, group := range groups {
@@ -137,7 +162,7 @@ func mergeKeywords(original string, groups ...[]string) []string {
 			}
 			seen[key] = struct{}{}
 			out = append(out, item)
-			if len(out) >= 8 {
+			if len(out) >= limit {
 				return out
 			}
 		}
