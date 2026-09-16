@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -27,7 +28,9 @@ type keywordPayload struct {
 }
 
 // ExpandContext optionally asks Ollama for Chinese search phrases and always falls back to Expand.
-// Enable it with KEYWORD_EXPANDER=ollama.
+// Enable it with KEYWORD_EXPANDER=ollama. By default an unavailable Ollama service is a soft
+// failure because static keyword expansion is already available. Set KEYWORD_EXPANDER_STRICT=true
+// when an Ollama failure should be surfaced to the API caller.
 func ExpandContext(ctx context.Context, keyword string) ([]string, error) {
 	fallback := Expand(keyword)
 	if !strings.EqualFold(strings.TrimSpace(os.Getenv("KEYWORD_EXPANDER")), "ollama") {
@@ -56,35 +59,67 @@ func ExpandContext(ctx context.Context, keyword string) ([]string, error) {
 
 	body, err := json.Marshal(ollamaGenerateRequest{Model: model, Prompt: prompt, Stream: false, Format: "json"})
 	if err != nil {
-		return fallback, err
+		return keywordExpansionFallback(fallback, fmt.Errorf("encode ollama request: %w", err))
 	}
 
-	requestCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	timeout := 20 * time.Second
+	if value := strings.TrimSpace(os.Getenv("OLLAMA_KEYWORD_TIMEOUT_SEC")); value != "" {
+		if parsed, parseErr := time.ParseDuration(value + "s"); parseErr == nil && parsed > 0 {
+			timeout = parsed
+		}
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, baseURL+"/api/generate", bytes.NewReader(body))
 	if err != nil {
-		return fallback, err
+		return keywordExpansionFallback(fallback, fmt.Errorf("build ollama keyword request: %w", err))
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return fallback, fmt.Errorf("ollama keyword expansion failed: %w", err)
+		return keywordExpansionFallback(fallback, fmt.Errorf("ollama keyword expansion failed: %w", err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fallback, fmt.Errorf("ollama keyword expansion returned %s", resp.Status)
+		return keywordExpansionFallback(fallback, fmt.Errorf("ollama keyword expansion returned %s", resp.Status))
 	}
 
 	var generated ollamaGenerateResponse
 	if err := json.NewDecoder(resp.Body).Decode(&generated); err != nil {
-		return fallback, fmt.Errorf("decode ollama response: %w", err)
+		return keywordExpansionFallback(fallback, fmt.Errorf("decode ollama response: %w", err))
 	}
 	var payload keywordPayload
 	if err := json.Unmarshal([]byte(generated.Response), &payload); err != nil {
-		return fallback, fmt.Errorf("decode keyword JSON: %w", err)
+		return keywordExpansionFallback(fallback, fmt.Errorf("decode keyword JSON: %w", err))
 	}
 
 	return mergeKeywords(keyword, fallback, payload.Keywords), nil
+}
+
+func keywordExpansionFallback(fallback []string, err error) ([]string, error) {
+	if err == nil {
+		return fallback, nil
+	}
+	if envDiscoveryBool("KEYWORD_EXPANDER_STRICT", false) {
+		return fallback, err
+	}
+	log.Printf("keyword expander unavailable; using static fallback: %v", err)
+	return fallback, nil
+}
+
+func envDiscoveryBool(name string, fallback bool) bool {
+	value := strings.TrimSpace(strings.ToLower(os.Getenv(name)))
+	if value == "" {
+		return fallback
+	}
+	switch value {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallback
+	}
 }
 
 func mergeKeywords(original string, groups ...[]string) []string {
