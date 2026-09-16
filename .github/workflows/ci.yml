@@ -33,5 +33,6 @@ jobs:
           scripts/localize_smart.py
           scripts/localize_worker_smart.py
           scripts/douyin_search_browser.py
+          scripts/douyin_search_browser_v2.py
       - name: Validate Dockerfile
         run: docker buildx build --check .
