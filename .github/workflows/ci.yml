@@ -33,6 +33,7 @@ jobs:
           scripts/localize_smart.py
           scripts/localize_worker_smart.py
           scripts/localize_subtitles.py
+          scripts/localize_ocr_music.py
           scripts/render_subtitles.py
           scripts/douyin_search_browser.py
           scripts/douyin_search_browser_v2.py
