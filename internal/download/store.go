@@ -83,7 +83,7 @@ func (s *jobStore) ensureColumn(name, definition string) error {
 	if err != nil {
 		return fmt.Errorf("inspect jobs schema: %w", err)
 	}
-	defer rows.Close()
+	found := false
 	for rows.Next() {
 		var cid int
 		var columnName, columnType string
@@ -91,14 +91,23 @@ func (s *jobStore) ensureColumn(name, definition string) error {
 		var defaultValue sql.NullString
 		var pk int
 		if err := rows.Scan(&cid, &columnName, &columnType, &notNull, &defaultValue, &pk); err != nil {
+			_ = rows.Close()
 			return fmt.Errorf("scan jobs schema: %w", err)
 		}
 		if columnName == name {
-			return nil
+			found = true
+			break
 		}
 	}
 	if err := rows.Err(); err != nil {
+		_ = rows.Close()
 		return fmt.Errorf("iterate jobs schema: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close jobs schema rows: %w", err)
+	}
+	if found {
+		return nil
 	}
 	if _, err := s.db.Exec("ALTER TABLE jobs ADD COLUMN " + name + " " + definition); err != nil {
 		return fmt.Errorf("add jobs.%s: %w", name, err)
