@@ -18,8 +18,9 @@ import (
 )
 
 // DouyinProvider deliberately has no platform-specific CLI dependency.
-// Discovery uses a public web index to obtain canonical douyin.com/video URLs;
-// download/metadata resolution is handled later by the normal VideoGet pipeline.
+// Discovery first uses a public web index as a cheap fast path. When that does
+// not fill the requested result count, it falls back to Douyin's own rendered
+// search page through a real Chrome/Chromium browser.
 type DouyinProvider struct{}
 
 func NewDouyinProvider() *DouyinProvider { return &DouyinProvider{} }
@@ -27,8 +28,9 @@ func NewDouyinProvider() *DouyinProvider { return &DouyinProvider{} }
 func (p *DouyinProvider) Name() string { return "douyin" }
 
 func (p *DouyinProvider) Available() error {
-	// Public-index discovery only requires outbound HTTP access. Do not make the
-	// whole provider unavailable just because a Douyin-specific executable is absent.
+	// Public-index discovery only requires outbound HTTP access. Browser-native
+	// discovery is a fallback, so the provider remains available even if Chrome
+	// is temporarily missing or disabled.
 	return nil
 }
 
@@ -40,7 +42,36 @@ func (p *DouyinProvider) Search(ctx context.Context, keyword string, limit int) 
 	if limit <= 0 {
 		limit = 10
 	}
-	return p.searchPublicIndex(ctx, keyword, limit)
+	if limit > 50 {
+		limit = 50
+	}
+
+	publicResults, publicErr := p.searchPublicIndex(ctx, keyword, limit)
+	if len(publicResults) >= limit || !douyinNativeSearchEnabled() {
+		if len(publicResults) > 0 {
+			return publicResults[:minInt(limit, len(publicResults))], nil
+		}
+		if publicErr != nil {
+			return nil, publicErr
+		}
+		return nil, fmt.Errorf("douyin discovery returned no video URLs for %q", keyword)
+	}
+
+	nativeResults, nativeErr := p.searchNativeBrowser(ctx, keyword, limit)
+	merged := mergeDouyinSearchResults(publicResults, nativeResults, limit)
+	if len(merged) > 0 {
+		return merged, nil
+	}
+	if publicErr != nil && nativeErr != nil {
+		return nil, fmt.Errorf("douyin discovery failed: public index: %v | native browser: %v", publicErr, nativeErr)
+	}
+	if nativeErr != nil {
+		return nil, nativeErr
+	}
+	if publicErr != nil {
+		return nil, publicErr
+	}
+	return nil, fmt.Errorf("douyin discovery returned no video URLs for %q", keyword)
 }
 
 type guestRSS struct {
