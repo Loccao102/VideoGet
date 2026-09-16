@@ -18,8 +18,10 @@ func TestJobStoreRoundTrip(t *testing.T) {
 
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	job := Job{
-		ID:     "job-1",
-		Status: JobDone,
+		ID:               "job-1",
+		Status:           JobDone,
+		ProcessingMode:   ProcessingSubtitles,
+		SubtitleRevision: 3,
 		Video: model.Video{
 			ID:       "BV123",
 			Platform: "bilibili",
@@ -29,9 +31,10 @@ func TestJobStoreRoundTrip(t *testing.T) {
 		SourceOutput: "/downloads/job-1/source.mp4",
 		Output:       "/downloads/job-1/localized/final.mp4",
 		Localization: &localize.Result{
-			OutputVideo:      "/downloads/job-1/localized/final.mp4",
-			DetectedLanguage: "zh",
-			Segments:         12,
+			OutputVideo:          "/downloads/job-1/localized/final.mp4",
+			VietnameseSubtitle:  "/downloads/job-1/localized/final.vi.srt",
+			DetectedLanguage:     "zh",
+			Segments:             12,
 		},
 		Attempts:  2,
 		CreatedAt: now,
@@ -54,6 +57,9 @@ func TestJobStoreRoundTrip(t *testing.T) {
 	}
 	if got.Attempts != 2 {
 		t.Fatalf("Attempts = %d, want 2", got.Attempts)
+	}
+	if got.ProcessingMode != ProcessingSubtitles || got.SubtitleRevision != 3 {
+		t.Fatalf("processing state = %q/r%d, want subtitles/r3", got.ProcessingMode, got.SubtitleRevision)
 	}
 	if got.Localization == nil || got.Localization.Segments != 12 || got.Localization.DetectedLanguage != "zh" {
 		t.Fatalf("unexpected localization round trip: %#v", got.Localization)
