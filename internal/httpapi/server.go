@@ -45,6 +45,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/jobs/{id}", s.getJob)
 	mux.HandleFunc("DELETE /api/jobs/{id}", s.deleteJob)
 	mux.HandleFunc("POST /api/jobs/{id}/retry", s.retryJob)
+	mux.HandleFunc("GET /api/jobs/{id}/subtitle", s.getSubtitle)
+	mux.HandleFunc("PUT /api/jobs/{id}/subtitle", s.saveSubtitle)
+	mux.HandleFunc("POST /api/jobs/{id}/subtitle/render", s.rerenderSubtitle)
 	if s.web != nil {
 		mux.Handle("/", http.FileServer(http.FS(s.web)))
 	}
@@ -65,6 +68,11 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 		"providers":    providers,
 		"localization": s.jobs.LocalizationStatus(),
 		"persistence":  s.jobs.PersistenceStatus(),
+		"processingModes": []string{
+			download.ProcessingDownload,
+			download.ProcessingSubtitles,
+			download.ProcessingDub,
+		},
 		"preview": map[string]any{
 			"enabled":     true,
 			"concurrency": envPositiveInt("PREVIEW_CONCURRENCY", 4),
@@ -90,13 +98,14 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 	if req.Limit > 100 {
 		req.Limit = 100
 	}
+	// Source selection is exact. When the client sends a list, VideoGet only
+	// searches those platforms. An empty list means all available providers.
 	if len(req.Sources) == 0 {
 		for name := range s.providers {
 			req.Sources = append(req.Sources, name)
 		}
 		sort.Strings(req.Sources)
 	}
-	req.Sources = s.expandFreeSources(req.Sources)
 
 	keywords := []string{req.Keyword}
 	var expansionErr error
@@ -130,6 +139,10 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 		}
 		seenSources[name] = struct{}{}
 		uniqueSources = append(uniqueSources, name)
+	}
+	if len(uniqueSources) == 0 {
+		writeError(w, http.StatusBadRequest, "select at least one source")
+		return
 	}
 
 	bufferSize := len(uniqueSources) * len(keywords)
@@ -231,6 +244,7 @@ func (s *Server) preview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, payload)
 }
 
+// Kept for deployments that still use AUTO_FREE_SOURCES outside the web UI.
 func (s *Server) expandFreeSources(requested []string) []string {
 	if !envBool("AUTO_FREE_SOURCES", true) {
 		return requested
@@ -328,13 +342,14 @@ func envPositiveInt(name string, fallback int) int {
 func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Video model.Video `json:"video"`
+		Mode  string      `json:"mode"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
 	if strings.EqualFold(strings.TrimSpace(req.Video.MediaType), "image") {
-		writeError(w, http.StatusUnprocessableEntity, "candidate này là bài ảnh, không có video để tải/Việt hóa")
+		writeError(w, http.StatusUnprocessableEntity, "candidate này là bài ảnh, không có video để tải/xử lý")
 		return
 	}
 
@@ -354,7 +369,7 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	job, err := s.jobs.Start(req.Video)
+	job, err := s.jobs.StartWithMode(req.Video, req.Mode)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

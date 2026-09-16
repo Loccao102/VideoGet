@@ -32,6 +32,8 @@ jobs:
           scripts/smart_render.py
           scripts/localize_smart.py
           scripts/localize_worker_smart.py
+          scripts/localize_subtitles.py
+          scripts/render_subtitles.py
           scripts/douyin_search_browser.py
           scripts/douyin_search_browser_v2.py
           scripts/douyin_video_browser.py

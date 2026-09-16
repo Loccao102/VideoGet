@@ -3,37 +3,43 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>VideoGet Affiliate Trend Hunter</title>
+  <title>VideoGet</title>
   <style>
-    :root{color-scheme:dark}*{box-sizing:border-box}body{font-family:Inter,system-ui,sans-serif;background:#0b0d11;color:#eee;margin:0}.wrap{max-width:1180px;margin:auto;padding:36px 20px}.panel,.card{background:#13171f;border:1px solid #293140;border-radius:14px}.panel{padding:18px}.search{display:grid;grid-template-columns:1fr auto;gap:10px}input,button,select{font:inherit}input[type=text],input[type=number],select{background:#0d1117;color:#fff;border:1px solid #333d4d;border-radius:9px;padding:10px}button,.linkbtn{border:0;border-radius:9px;padding:11px 15px;font-weight:700;cursor:pointer;background:#f2f2f2;color:#111;text-decoration:none;display:inline-flex;align-items:center;justify-content:center}button:disabled{opacity:.45;cursor:not-allowed}.linkbtn.secondary{background:#202735;color:#dce6f5;border:1px solid #394457}.filters{display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-top:12px}.filters label{font-size:13px;color:#c8d0dc}.filters input[type=number]{width:90px}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:14px;margin-top:20px}.card{overflow:hidden}.card.image-only{opacity:.68}.preview{display:block;position:relative;width:100%;aspect-ratio:16/9;background:linear-gradient(135deg,#0c1119,#182130);overflow:hidden;color:#aebbd0;text-decoration:none}.preview img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .2s ease}.preview:hover img{transform:scale(1.025)}.preview-placeholder{position:absolute;inset:0;display:flex;flex-direction:column;gap:7px;align-items:center;justify-content:center;text-align:center;padding:18px;background:radial-gradient(circle at 50% 35%,#1b2636,#0b0f16 72%)}.preview-placeholder strong{font-size:14px;color:#dbe7f7}.preview-placeholder span{font-size:11px;color:#8494aa}.source-badge{position:absolute;left:10px;top:10px;padding:5px 8px;border-radius:999px;background:rgba(5,8,12,.78);backdrop-filter:blur(5px);font-size:11px;font-weight:800;color:#e8eef8;border:1px solid rgba(255,255,255,.12)}.source-badge.image{background:rgba(77,49,16,.88);color:#ffe1a3}.preview-open{position:absolute;right:10px;bottom:10px;padding:5px 8px;border-radius:8px;background:rgba(5,8,12,.78);font-size:11px;color:#e8eef8}.body{padding:12px}.title{font-weight:700;min-height:44px}.meta{font-size:12px;color:#9aa7b7;margin:8px 0}.row{display:flex;justify-content:space-between;gap:10px;align-items:center}.muted{color:#9aa7b7}.error{white-space:pre-wrap;color:#ffb5b5;margin-top:10px}.jobs{margin-top:28px}.job{padding:12px 0;border-top:1px solid #252c38}.job small{display:block;color:#9aa7b7;margin-top:5px;word-break:break-all}.job-actions{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}.job-actions button{padding:7px 10px;font-size:12px}.job-actions .danger{background:#351a1a;color:#ffb5b5;border:1px solid #6a3030}.status{font-weight:700}.ok{color:#8ee59d}.warn{color:#ffd080}.bad{color:#ff9a9a}.toolbar{margin-top:24px;display:flex;gap:10px;justify-content:space-between;align-items:center;flex-wrap:wrap}.actions{display:flex;gap:8px;flex-wrap:wrap}.card-actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px}.card-actions button,.card-actions .linkbtn{padding:8px 10px;font-size:12px}.chips{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px}.chip,.score{display:inline-block;border:1px solid #394457;background:#10151d;border-radius:999px;padding:4px 8px;font-size:11px;color:#cbd6e5}.score{border-color:#4a5c77}.score strong{color:#fff}.score.affiliate{border-color:#6a5d34;color:#f0df9c}.media-chip{border-color:#3d6650}.media-chip.image{border-color:#765d31;color:#ffd995}.empty{padding:28px;text-align:center;color:#8190a3}.subtle{font-size:12px;color:#8190a3}.source-note{margin-top:10px;padding-top:10px;border-top:1px solid #252c38}@media(max-width:650px){.search{grid-template-columns:1fr}.toolbar{align-items:stretch}.actions{width:100%}.actions button{flex:1}.card-actions>*{flex:1}}
+    :root{color-scheme:dark;--bg:#0a0d12;--panel:#121821;--panel2:#0e141c;--border:#283445;--text:#edf3fb;--muted:#93a3b7;--accent:#73a7ff;--ok:#87dfa0;--warn:#ffd17d;--bad:#ff9f9f}
+    *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 20% 0,#172236 0,#0a0d12 34%);color:var(--text);font-family:Inter,system-ui,-apple-system,sans-serif}.wrap{max-width:1240px;margin:auto;padding:32px 20px 70px}.hero{display:flex;justify-content:space-between;gap:18px;align-items:end;margin-bottom:20px}.hero h1{margin:0;font-size:31px}.hero p{margin:7px 0 0;color:var(--muted);max-width:780px}.panel,.card,.modal-card{background:rgba(18,24,33,.94);border:1px solid var(--border);border-radius:16px}.panel{padding:18px}.search{display:grid;grid-template-columns:1fr auto;gap:10px}input,button,select,textarea{font:inherit}input[type=text],input[type=number],select,textarea{background:#0b1119;color:#fff;border:1px solid #354257;border-radius:10px;padding:10px}button,.btn{border:0;border-radius:10px;padding:10px 14px;font-weight:700;cursor:pointer;background:#eef3fa;color:#10151d;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:6px}button:disabled{opacity:.45;cursor:not-allowed}.secondary{background:#1a2431;color:#dce8f8;border:1px solid #36465c}.danger{background:#351a1d;color:#ffc1c1;border:1px solid #6a3037}.ghost{background:transparent;color:#b8c8dc;border:1px solid #334155}.section-title{font-size:12px;text-transform:uppercase;letter-spacing:.09em;color:#7f90a7;margin:16px 0 8px}.source-grid{display:flex;flex-wrap:wrap;gap:8px}.source{display:inline-flex;align-items:center;gap:7px;padding:7px 10px;border:1px solid #334156;border-radius:999px;background:#0c121a;font-size:13px;color:#cad6e6}.source input{accent-color:#7aa8ff}.filters{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:12px}.filters label{font-size:13px;color:#c8d3e1}.filters input[type=number]{width:90px}.mode-box{display:grid;grid-template-columns:minmax(240px,390px) 1fr;gap:12px;margin-top:14px;padding:13px;border:1px solid #2d3a4d;border-radius:12px;background:#0d141d}.mode-help{font-size:12px;color:var(--muted);line-height:1.5}.subtle,.muted{color:var(--muted);font-size:12px}.error{white-space:pre-wrap;color:#ffb4b4;margin-top:10px}.chips{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px}.chip,.score,.mode-chip{display:inline-block;border:1px solid #39475b;background:#0d141d;border-radius:999px;padding:4px 8px;font-size:11px;color:#cbd7e7}.mode-chip.subtitles{border-color:#37604a;color:#a9e6bb}.mode-chip.dub{border-color:#675f35;color:#f0df96}.mode-chip.download{border-color:#3b4f6e;color:#b9d4ff}.toolbar{margin:22px 0 0;display:flex;gap:12px;justify-content:space-between;align-items:center;flex-wrap:wrap}.actions,.job-actions,.card-actions{display:flex;gap:8px;flex-wrap:wrap}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;margin-top:16px}.card{overflow:hidden}.card.image-only{opacity:.62}.preview{display:block;position:relative;width:100%;aspect-ratio:16/9;background:linear-gradient(135deg,#0c1119,#182130);overflow:hidden;color:#aebbd0;text-decoration:none}.preview img{width:100%;height:100%;object-fit:cover;display:block}.preview-placeholder{position:absolute;inset:0;display:flex;flex-direction:column;gap:7px;align-items:center;justify-content:center;text-align:center;padding:18px;background:radial-gradient(circle at 50% 35%,#1b2636,#0b0f16 72%)}.preview-placeholder strong{font-size:14px}.preview-placeholder span{font-size:11px;color:#8494aa}.source-badge{position:absolute;left:10px;top:10px;padding:5px 8px;border-radius:999px;background:rgba(5,8,12,.8);font-size:11px;font-weight:800;border:1px solid rgba(255,255,255,.12)}.preview-open{position:absolute;right:10px;bottom:10px;padding:5px 8px;border-radius:8px;background:rgba(5,8,12,.8);font-size:11px}.body{padding:12px}.title{font-weight:750;min-height:45px;line-height:1.35}.meta{font-size:12px;color:#9baabc;margin:8px 0}.row{display:flex;justify-content:space-between;gap:10px;align-items:center}.empty{padding:30px;text-align:center;color:#8191a5}.jobs{margin-top:30px}.job{padding:14px 0;border-top:1px solid #263142}.job:first-child{border-top:0}.job-head{display:flex;justify-content:space-between;gap:12px;align-items:start}.status{font-weight:750}.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}.job small{display:block;color:#91a1b5;margin-top:5px;word-break:break-word}.job-actions{margin-top:10px}.job-actions button{padding:7px 10px;font-size:12px}.modal{position:fixed;inset:0;background:rgba(0,0,0,.72);display:none;align-items:center;justify-content:center;padding:20px;z-index:50}.modal.open{display:flex}.modal-card{width:min(940px,100%);max-height:92vh;display:flex;flex-direction:column;padding:18px}.modal-head{display:flex;justify-content:space-between;align-items:center;gap:10px}.modal textarea{width:100%;min-height:55vh;resize:vertical;margin-top:12px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:13px;line-height:1.5}.modal-actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin-top:12px}.hint{padding:9px 11px;border:1px solid #2f4056;border-radius:10px;background:#0c131c;color:#aebed1;font-size:12px;margin-top:10px}.source-tools{display:flex;gap:8px;margin-left:auto}.source-tools button{padding:6px 9px;font-size:11px}.score.affiliate{border-color:#6a5d34;color:#f0df9c}.media-chip.image{border-color:#765d31;color:#ffd995}@media(max-width:700px){.search{grid-template-columns:1fr}.mode-box{grid-template-columns:1fr}.hero{align-items:start;flex-direction:column}.toolbar{align-items:stretch}.actions{width:100%}.actions button{flex:1}.card-actions>*{flex:1}.source-tools{width:100%;margin-left:0}}
   </style>
 </head>
 <body>
 <main class="wrap">
-  <h1>VideoGet <span class="subtle">Affiliate Trend Hunter</span></h1>
-  <p class="muted">Săn candidate từ nhiều nền tảng video Trung → chấm affiliate → preview → tải → sub → dịch → voice Việt.</p>
+  <div class="hero">
+    <div><h1>VideoGet</h1><p>Tìm video → chọn nền tảng → chọn cách xử lý. Download là core; subtitle và TTS là tùy chọn độc lập.</p></div>
+    <div id="health" class="muted"></div>
+  </div>
 
   <section class="panel">
     <form id="f">
       <div class="search">
-        <input id="keyword" type="text" placeholder="đồ bếp, tẩy rửa, coffee, công nghệ..." required>
-        <button id="searchBtn">Săn trend</button>
+        <input id="keyword" type="text" placeholder="đồ bếp, mèo, công nghệ, coffee..." required>
+        <button id="searchBtn">Tìm video</button>
       </div>
+
+      <div class="section-title row"><span>Nền tảng</span><span class="source-tools"><button class="ghost" type="button" id="sourceAll">Chọn tất cả</button><button class="ghost" type="button" id="sourceNone">Bỏ chọn</button></span></div>
+      <div class="source-grid" id="sourceGrid"></div>
+
+      <div class="mode-box">
+        <label>Chế độ sau khi tải<br><select id="processingMode" style="width:100%;margin-top:6px"><option value="subtitles" selected>Sub Việt · không TTS</option><option value="download">Chỉ tải video gốc</option><option value="dub">Sub + voice Việt (TTS)</option></select></label>
+        <div id="modeHelp" class="mode-help"></div>
+      </div>
+
       <div class="filters">
-        <label><input type="checkbox" name="src" value="bilibili" checked> Bilibili</label>
-        <label><input type="checkbox" name="src" value="douyin" checked> Douyin</label>
         <label><input id="expand" type="checkbox" checked> Mở rộng keyword Trung</label>
         <label>Kết quả <select id="limit"><option>20</option><option selected>30</option><option>50</option><option>100</option></select></label>
         <label>Sắp xếp <select id="sort"><option value="rank" selected>Tổng hợp affiliate</option><option value="affiliate">Ý định affiliate</option><option value="latest">Mới nhất</option><option value="likes">Nhiều like</option><option value="views">Nhiều view</option></select></label>
-      </div>
-      <div class="filters">
         <label>Min likes <input id="minLikes" type="number" min="0" value="0"></label>
         <label>Trong <select id="days"><option value="0">mọi thời gian</option><option value="1">24 giờ</option><option value="7" selected>7 ngày</option><option value="30">30 ngày</option><option value="90">90 ngày</option></select></label>
         <label>Max giây <input id="maxDuration" type="number" min="0" value="180"></label>
-        <label>Auto Top <select id="topN"><option>3</option><option selected>5</option><option>10</option></select></label>
+        <label>Top <select id="topN"><option>3</option><option selected>5</option><option>10</option></select></label>
       </div>
-      <div class="subtle source-note">Nguồn free tự động: Kuaishou · Xiaohongshu · Weibo · Xigua · Haokan · Toutiao · AcFun · Meipai · Weishi. Xiaohongshu được kiểm tra Video/Ảnh trước khi cho tải.</div>
-      <div id="health" class="muted" style="margin-top:10px"></div>
       <div id="keywords" class="chips"></div>
       <div id="err" class="error"></div>
     </form>
@@ -41,197 +47,76 @@
 
   <div class="toolbar">
     <div id="count" class="muted">Chưa có kết quả</div>
-    <div class="actions">
-      <button id="downloadTop" disabled>Tải + Việt hóa Top 5</button>
-      <button id="downloadSelected" disabled>Tải đã chọn</button>
-    </div>
+    <div class="actions"><button id="downloadTop" disabled></button><button id="downloadSelected" disabled>Tải đã chọn</button></div>
   </div>
-
   <section id="results" class="grid"></section>
 
   <section class="panel jobs">
-    <div class="row"><strong>Jobs: Download → Sub → Dịch → Voice → Render</strong><button id="refresh" type="button">Làm mới</button></div>
+    <div class="row"><div><strong>Jobs</strong><div class="subtle">Download → xử lý theo mode đã chọn → có thể sửa SRT và render lại mà không tải/TTS lại.</div></div><button id="refresh" type="button">Làm mới</button></div>
     <div id="jobs"></div>
   </section>
 </main>
+
+<div class="modal" id="subtitleModal">
+  <div class="modal-card">
+    <div class="modal-head"><div><strong>Subtitle Editor</strong><div class="subtle" id="subtitleMeta"></div></div><button class="ghost" id="closeSubtitle" type="button">Đóng</button></div>
+    <div class="hint">Sửa trực tiếp nội dung SRT. “Lưu + render lại” chỉ burn file sub hiện tại vào video gốc đã tải — không chạy Whisper, dịch hay TTS lại.</div>
+    <textarea id="subtitleText" spellcheck="false"></textarea>
+    <div class="modal-actions"><button class="secondary" id="saveSubtitle" type="button">Lưu sub</button><button id="saveRenderSubtitle" type="button">Lưu + render lại</button></div>
+  </div>
+</div>
+
 <script>
-const S={results:[],selected:new Set(),keywords:[],previewGeneration:0};
+const PLATFORMS=[['douyin','Douyin'],['bilibili','Bilibili'],['kuaishou','Kuaishou'],['xiaohongshu','Xiaohongshu'],['weibo','Weibo'],['xigua','Xigua'],['haokan','Haokan'],['toutiao','Toutiao'],['acfun','AcFun'],['meipai','Meipai'],['weishi','Weishi']];
+const S={results:[],selected:new Set(),keywords:[],previewGeneration:0,editingJob:null};
 const $=id=>document.getElementById(id);
-const statusLabel={queued:'Đang chờ',downloading:'Đang tải',localizing:'Đang tạo sub + voice Việt',done:'Hoàn tất',failed:'Tải thất bại',localization_failed:'Tải xong nhưng Việt hóa lỗi'};
+const statusLabel={queued:'Đang chờ',downloading:'Đang tải',localizing:'Đang tạo subtitle',rendering:'Đang render lại sub',done:'Hoàn tất',failed:'Tải thất bại',localization_failed:'Xử lý subtitle/TTS lỗi'};
+const modeLabel={download:'Chỉ tải',subtitles:'Sub Việt',dub:'Sub + TTS'};
+const platformLabel=Object.fromEntries(PLATFORMS);
 const fmt=n=>n?Intl.NumberFormat('vi',{notation:n>=10000?'compact':'standard',maximumFractionDigits:1}).format(n):'0';
 const sec=n=>Number.isFinite(+n)?`${(+n).toFixed(1)}s`:'-';
-const platformLabel={bilibili:'Bilibili',douyin:'Douyin',kuaishou:'Kuaishou',xiaohongshu:'Xiaohongshu',weibo:'Weibo',xigua:'Xigua',haokan:'Haokan',toutiao:'Toutiao',acfun:'AcFun',meipai:'Meipai',weishi:'Weishi'};
 
-async function health(){
-  try{
-    const d=await fetch('/api/health').then(r=>r.json());
-    const ready=Object.values(d.providers||{}).filter(v=>v.available).length;
-    const total=Object.keys(d.providers||{}).length;
-    const parts=[`Nguồn: ${ready}/${total} ready`];
-    if(d.preview?.enabled)parts.push(`Preview: ready · ${d.preview.concurrency||4} luồng`);
-    if(d.localization){
-      parts.push(`Việt hóa: ${d.localization.enabled?(d.localization.available?'ready':'unavailable'):'off'}`);
-      if(d.localization.persistentWorker){
-        const wi=d.localization.workerInfo||{};
-        parts.push(`Whisper: ${d.localization.workerRunning?'warm':'warming'}${wi.model?` · ${wi.model}/${wi.device||'?'}`:''}`);
-      }
-    }
-    if(d.persistence)parts.push(`SQLite: ${d.persistence.enabled?'ready':'off'} · ${d.persistence.jobs||0} jobs`);
-    $('health').textContent=parts.join(' · ');
-  }catch{}
-}
+function buildSources(){const host=$('sourceGrid');for(const [value,label] of PLATFORMS){const el=document.createElement('label');el.className='source';const cb=document.createElement('input');cb.type='checkbox';cb.name='src';cb.value=value;cb.checked=value==='douyin'||value==='bilibili';el.append(cb,document.createTextNode(label));host.append(el)}}
+function chosenSources(){return [...document.querySelectorAll('input[name=src]:checked')].map(x=>x.value)}
+$('sourceAll').onclick=()=>document.querySelectorAll('input[name=src]').forEach(x=>x.checked=true);
+$('sourceNone').onclick=()=>document.querySelectorAll('input[name=src]').forEach(x=>x.checked=false);
 
-$('f').onsubmit=async e=>{
-  e.preventDefault();$('err').textContent='';$('searchBtn').disabled=true;S.previewGeneration++;
-  try{
-    const sources=[...document.querySelectorAll('input[name=src]:checked')].map(x=>x.value);
-    const payload={keyword:$('keyword').value.trim(),sources,limit:+$('limit').value,expand:$('expand').checked,sort:$('sort').value,filters:{minLikes:+$('minLikes').value||0,maxDurationSec:+$('maxDuration').value||0,publishedWithinDays:+$('days').value||0}};
-    const r=await fetch('/api/search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-    const d=await r.json();if(!r.ok)throw Error(d.error||'Search failed');
-    S.results=d.results||[];S.keywords=d.keywords||[];S.selected.clear();render();
-    if(d.errors)$('err').textContent=Object.entries(d.errors).map(([k,v])=>`${k}: ${v}`).join('\n');
-    hydratePreviews(S.previewGeneration);
-  }catch(e){$('err').textContent=e.message}
-  finally{$('searchBtn').disabled=false}
-};
+function modeText(){const m=$('processingMode').value;return m==='download'?'Video sẽ chỉ được tải về. Không chạy Whisper, dịch, subtitle hay TTS.':m==='dub'?'Sau khi tải: Whisper → dịch Việt → TTS → render. Đây là mode nặng nhất.':'Sau khi tải: Whisper → dịch Việt → tạo SRT → burn sub. Giữ audio gốc, không gọi TTS.'}
+function refreshModeUI(){const m=$('processingMode').value;$('modeHelp').textContent=modeText();$('downloadSelected').textContent=m==='download'?'Tải đã chọn':m==='dub'?'Tải + Sub + TTS đã chọn':'Tải + Sub đã chọn';$('downloadTop').textContent=`${m==='download'?'Tải':m==='dub'?'Sub + TTS':'Sub'} Top ${$('topN').value}`;renderButtonLabels()}
+$('processingMode').onchange=refreshModeUI;$('topN').onchange=refreshModeUI;
 
-function previewPlaceholder(v,state='loading'){
-  const p=document.createElement('div');p.className='preview-placeholder';
-  const strong=document.createElement('strong');strong.textContent=state==='loading'?'Đang lấy ảnh preview…':'Chưa lấy được ảnh';
-  const small=document.createElement('span');small.textContent=state==='loading'?'Đang kiểm tra metadata và loại nội dung':`Bấm để mở ${platformLabel[v.platform]||v.platform||'nguồn'}`;
-  p.append(strong,small);return p;
-}
+async function health(){try{const d=await fetch('/api/health').then(r=>r.json());const ready=Object.values(d.providers||{}).filter(v=>v.available).length,total=Object.keys(d.providers||{}).length;const parts=[`Nguồn ${ready}/${total}`];if(d.localization)parts.push(`Subtitle ${d.localization.available?'ready':'unavailable'}`);if(d.persistence)parts.push(`SQLite ${d.persistence.jobs||0} jobs`);$('health').textContent=parts.join(' · ')}catch{}}
 
-function mediaLabel(v){
-  if(v.mediaType==='image')return '📷 Bài ảnh';
-  if(v.mediaType==='video')return '▶ Video';
-  return '';
-}
+$('f').onsubmit=async e=>{e.preventDefault();$('err').textContent='';const sources=chosenSources();if(!sources.length){$('err').textContent='Hãy chọn ít nhất một nền tảng.';return}$('searchBtn').disabled=true;S.previewGeneration++;try{const payload={keyword:$('keyword').value.trim(),sources,limit:+$('limit').value,expand:$('expand').checked,sort:$('sort').value,filters:{minLikes:+$('minLikes').value||0,maxDurationSec:+$('maxDuration').value||0,publishedWithinDays:+$('days').value||0}};const r=await fetch('/api/search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const d=await r.json();if(!r.ok)throw Error(d.error||'Search failed');S.results=d.results||[];S.keywords=d.keywords||[];S.selected.clear();render();if(d.errors)$('err').textContent=Object.entries(d.errors).map(([k,v])=>`${k}: ${v}`).join('\n');hydratePreviews(S.previewGeneration)}catch(e){$('err').textContent=e.message}finally{$('searchBtn').disabled=false}};
 
-function updatePreviewCard(i,state='ready'){
-  const v=S.results[i];if(!v)return;
-  const link=$(`preview-${i}`);if(!link)return;
-  link.href=v.url||'#';link.replaceChildren();
-  if(v.thumbnail){
-    const img=document.createElement('img');img.loading='lazy';img.referrerPolicy='no-referrer';img.alt=v.title||v.id||'preview';img.src=v.thumbnail;
-    img.onerror=()=>{if(img.parentNode===link){link.replaceChildren(previewPlaceholder(v,'missing'));appendPreviewOverlays(link,v)}};
-    link.append(img);
-  }else link.append(previewPlaceholder(v,state==='loading'?'loading':'missing'));
-  appendPreviewOverlays(link,v);
-  const title=$(`title-${i}`);if(title)title.textContent=`#${i+1} ${v.title||v.id}`;
-  const meta=$(`meta-${i}`);if(meta)meta.textContent=[platformLabel[v.platform]||v.platform,mediaLabel(v),v.author,v.views?`${fmt(v.views)} views`:null,v.likes?`${fmt(v.likes)} likes`:null,v.durationSec?`${v.durationSec}s`:null].filter(Boolean).join(' · ');
-  syncCardEligibility(i,state);
-}
+function previewPlaceholder(v,state='loading'){const p=document.createElement('div');p.className='preview-placeholder';const strong=document.createElement('strong');strong.textContent=state==='loading'?'Đang lấy preview…':'Chưa có preview';const small=document.createElement('span');small.textContent=`Bấm để mở ${platformLabel[v.platform]||v.platform||'nguồn'}`;p.append(strong,small);return p}
+function appendPreviewOverlays(link,v){const b=document.createElement('span');b.className='source-badge';b.textContent=`${platformLabel[v.platform]||v.platform}${v.mediaType==='image'?' · Ảnh':''}`;const o=document.createElement('span');o.className='preview-open';o.textContent='↗ Xem nguồn';link.append(b,o)}
+function mediaLabel(v){return v.mediaType==='image'?'📷 Ảnh':v.mediaType==='video'?'▶ Video':''}
+function updatePreviewCard(i,state='ready'){const v=S.results[i],link=$(`preview-${i}`);if(!v||!link)return;link.href=v.url||'#';link.replaceChildren();if(v.thumbnail){const img=document.createElement('img');img.loading='lazy';img.referrerPolicy='no-referrer';img.src=v.thumbnail;img.alt=v.title||v.id;img.onerror=()=>{link.replaceChildren(previewPlaceholder(v,'missing'));appendPreviewOverlays(link,v)};link.append(img)}else link.append(previewPlaceholder(v,state));appendPreviewOverlays(link,v);const meta=$(`meta-${i}`);if(meta)meta.textContent=[platformLabel[v.platform]||v.platform,mediaLabel(v),v.author,v.views?`${fmt(v.views)} views`:null,v.likes?`${fmt(v.likes)} likes`:null,v.durationSec?`${v.durationSec}s`:null].filter(Boolean).join(' · ');syncEligibility(i,state)}
+function syncEligibility(i,state='ready'){const v=S.results[i],image=v?.mediaType==='image',checking=v?.platform==='xiaohongshu'&&!v.mediaType&&state==='loading';const cb=$(`select-${i}`),btn=$(`download-${i}`),card=$(`card-${i}`),media=$(`media-${i}`);if(card)card.classList.toggle('image-only',image);if(cb){cb.disabled=image||checking;if(cb.disabled){cb.checked=false;S.selected.delete(i)}}if(btn)btn.disabled=image||checking;if(media){media.className='score media-chip'+(image?' image':'');media.textContent=image?'Bài ảnh · bỏ qua':checking?'Đang xác minh':'Video'}renderButtonLabels()}
+function renderButtonLabels(){const mode=$('processingMode').value;for(let i=0;i<S.results.length;i++){const btn=$(`download-${i}`);if(!btn||btn.disabled)continue;btn.textContent=mode==='download'?'Tải':mode==='dub'?'Tải + Sub + TTS':'Tải + Sub'}$('downloadSelected').disabled=!S.selected.size;$('downloadTop').disabled=!S.results.length}
 
-function appendPreviewOverlays(link,v){
-  const badge=document.createElement('span');badge.className='source-badge'+(v.mediaType==='image'?' image':'');badge.textContent=v.mediaType==='image'?`${platformLabel[v.platform]||v.platform} · Ảnh`:(platformLabel[v.platform]||v.platform||'video');
-  const open=document.createElement('span');open.className='preview-open';open.textContent='↗ Xem nguồn';link.append(badge,open);
-}
+function render(){refreshModeUI();$('count').textContent=`${S.results.length} candidate · ${chosenSources().map(x=>platformLabel[x]||x).join(', ')}`;const kh=$('keywords');kh.replaceChildren();for(const k of S.keywords){const e=document.createElement('span');e.className='chip';e.textContent=k;kh.append(e)}const host=$('results');host.replaceChildren();if(!S.results.length){const e=document.createElement('div');e.className='empty';e.textContent='Không có candidate phù hợp.';host.append(e);return}S.results.forEach((v,i)=>{const c=document.createElement('article');c.className='card';c.id=`card-${i}`;const preview=document.createElement('a');preview.className='preview';preview.id=`preview-${i}`;preview.target='_blank';preview.rel='noopener noreferrer';preview.href=v.url||'#';const body=document.createElement('div');body.className='body';const title=document.createElement('div');title.className='title';title.textContent=`#${i+1} ${v.title||v.id}`;const meta=document.createElement('div');meta.className='meta';meta.id=`meta-${i}`;const chips=document.createElement('div');chips.className='chips';if(v.scores)chips.innerHTML=`<span class="score"><strong>${v.scores.overall}</strong> tổng</span><span class="score affiliate">${v.scores.affiliate??'-'} affiliate</span><span class="score">${v.scores.trend} trend</span>`;const media=document.createElement('span');media.id=`media-${i}`;media.className='score media-chip';chips.append(media);const src=document.createElement('div');src.className='subtle';src.style.marginTop='8px';src.textContent=v.searchSource?`match: ${v.searchSource}`:'';const row=document.createElement('div');row.className='row';row.style.marginTop='10px';const lab=document.createElement('label');const cb=document.createElement('input');cb.type='checkbox';cb.id=`select-${i}`;cb.onchange=()=>{cb.checked?S.selected.add(i):S.selected.delete(i);$('downloadSelected').disabled=!S.selected.size};lab.append(cb,document.createTextNode(' chọn'));row.append(lab);const actions=document.createElement('div');actions.className='card-actions';const open=document.createElement('a');open.className='btn secondary';open.href=v.url;open.target='_blank';open.rel='noopener noreferrer';open.textContent='Xem nguồn';const btn=document.createElement('button');btn.id=`download-${i}`;btn.onclick=()=>downloadVideo(S.results[i],btn);actions.append(open,btn);body.append(title,meta,chips,src,row,actions);c.append(preview,body);host.append(c);updatePreviewCard(i,v.thumbnail||v.mediaType?'ready':'loading')})}
 
-function syncCardEligibility(i,state='ready'){
-  const v=S.results[i];if(!v)return;
-  const image=v.mediaType==='image';
-  const checking=v.platform==='xiaohongshu'&&!v.mediaType&&state==='loading';
-  const btn=$(`download-${i}`),cb=$(`select-${i}`),card=$(`card-${i}`),chip=$(`media-${i}`);
-  if(card)card.classList.toggle('image-only',image);
-  if(chip){chip.textContent=image?'Bài ảnh · bỏ qua':v.mediaType==='video'?'Video đã xác minh':'Loại nội dung chưa xác minh';chip.className='score media-chip'+(image?' image':'')}
-  if(cb){cb.disabled=image||checking;if((image||checking)&&cb.checked){cb.checked=false;S.selected.delete(i)}}
-  if(btn){btn.disabled=image||checking;btn.textContent=image?'Bài ảnh · bỏ qua':checking?'Đang kiểm tra video…':(v.mediaType==='video'?'Tải + Việt hóa':'Thử tải + Việt hóa')}
-  $('downloadSelected').disabled=!S.selected.size;
-}
+async function hydratePreviews(generation){const max=Math.min(18,S.results.length),targets=[];for(let i=0;i<max;i++){const v=S.results[i];if(v?.url&&(!v.thumbnail||(v.platform==='xiaohongshu'&&!v.mediaType)))targets.push(i)}let cursor=0;async function worker(){while(cursor<targets.length){const i=targets[cursor++],snapshot=S.results[i];if(!snapshot)continue;try{const r=await fetch('/api/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({video:snapshot})});const d=await r.json();if(generation!==S.previewGeneration)return;if(d.video&&S.results[i]?.url===snapshot.url){S.results[i]={...S.results[i],...d.video};updatePreviewCard(i,d.available?'ready':'missing')}else updatePreviewCard(i,'missing')}catch{if(generation===S.previewGeneration)updatePreviewCard(i,'missing')}}}const concurrency=Math.min(4,targets.length);await Promise.all(Array.from({length:concurrency},()=>worker()))}
 
-function render(){
-  $('count').textContent=`${S.results.length} candidate · xếp theo ${$('sort').selectedOptions[0].textContent}`;
-  $('downloadSelected').disabled=!S.selected.size;$('downloadTop').disabled=!S.results.length;$('downloadTop').textContent=`Tải + Việt hóa Top ${$('topN').value}`;
-  const kh=$('keywords');kh.replaceChildren();for(const k of S.keywords){const el=document.createElement('span');el.className='chip';el.textContent=k;kh.append(el)}
-  const host=$('results');host.replaceChildren();
-  if(!S.results.length){const e=document.createElement('div');e.className='empty';e.textContent='Không có candidate phù hợp với filter hiện tại.';host.append(e);return}
-  S.results.forEach((v,i)=>{
-    const c=document.createElement('article');c.className='card';c.id=`card-${i}`;
-    const preview=document.createElement('a');preview.className='preview';preview.id=`preview-${i}`;preview.target='_blank';preview.rel='noopener noreferrer';preview.href=v.url||'#';
-    const b=document.createElement('div');b.className='body';
-    const t=document.createElement('div');t.className='title';t.id=`title-${i}`;t.textContent=`#${i+1} ${v.title||v.id}`;
-    const m=document.createElement('div');m.className='meta';m.id=`meta-${i}`;m.textContent=[platformLabel[v.platform]||v.platform,mediaLabel(v),v.author,v.views?`${fmt(v.views)} views`:null,v.likes?`${fmt(v.likes)} likes`:null,v.durationSec?`${v.durationSec}s`:null].filter(Boolean).join(' · ');
-    const scores=document.createElement('div');scores.className='chips';
-    if(v.scores)scores.innerHTML=`<span class="score"><strong>${v.scores.overall}</strong> tổng</span><span class="score affiliate">${v.scores.affiliate??'-'} affiliate</span><span class="score">${v.scores.trend} trend</span><span class="score">${v.scores.relevance} liên quan</span>`;
-    const media=document.createElement('span');media.id=`media-${i}`;media.className='score media-chip';scores.append(media);
-    const src=document.createElement('div');src.className='subtle';src.style.marginTop='8px';src.textContent=v.searchSource?`match: ${v.searchSource}`:'';
-    const row=document.createElement('div');row.className='row';row.style.marginTop='10px';
-    const lab=document.createElement('label');const cb=document.createElement('input');cb.id=`select-${i}`;cb.type='checkbox';cb.onchange=()=>{cb.checked?S.selected.add(i):S.selected.delete(i);$('downloadSelected').disabled=!S.selected.size};lab.append(cb,document.createTextNode(' chọn'));row.append(lab);
-    const actions=document.createElement('div');actions.className='card-actions';
-    const open=document.createElement('a');open.className='linkbtn secondary';open.href=v.url;open.target='_blank';open.rel='noopener noreferrer';open.textContent='Xem nguồn';
-    const btn=document.createElement('button');btn.id=`download-${i}`;btn.textContent='Tải + Việt hóa';btn.onclick=()=>download(S.results[i],btn);actions.append(open,btn);
-    b.append(t,m,scores,src,row,actions);c.append(preview,b);host.append(c);updatePreviewCard(i,v.thumbnail||v.mediaType?'ready':'loading');
-  });
-}
+async function downloadVideo(v,btn){if(v?.mediaType==='image')return;const mode=$('processingMode').value,original=btn?.textContent;if(btn){btn.disabled=true;btn.textContent='Đang vào queue…'}try{const r=await fetch('/api/download',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({video:v,mode})});const d=await r.json();if(!r.ok)throw Error(d.error||'Download error');if(btn)btn.textContent='Đã vào queue';await jobs()}catch(e){$('err').textContent=e.message;if(btn){btn.disabled=false;btn.textContent=original||'Thử lại'}}}
+$('downloadSelected').onclick=async()=>{for(const i of [...S.selected]){const v=S.results[i];if(v?.mediaType!=='image')await downloadVideo(v)}S.selected.clear();render()};
+$('downloadTop').onclick=async()=>{const n=+$('topN').value;for(const v of S.results.filter(v=>v.mediaType!=='image').slice(0,n))await downloadVideo(v);await jobs()};
 
-async function hydratePreviews(generation){
-  const max=Math.min(18,S.results.length),targets=[];
-  for(let i=0;i<max;i++){
-    const v=S.results[i];
-    if(v?.url&&(!v.thumbnail||(v.platform==='xiaohongshu'&&!v.mediaType)))targets.push(i);
-  }
-  let cursor=0;
-  async function worker(){
-    while(cursor<targets.length){
-      const i=targets[cursor++],snapshot=S.results[i];if(!snapshot)continue;
-      try{
-        const r=await fetch('/api/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({video:snapshot})});
-        const d=await r.json();if(generation!==S.previewGeneration)return;
-        if(d.video&&S.results[i]?.url===snapshot.url){S.results[i]={...S.results[i],...d.video};updatePreviewCard(i,d.available?'ready':'missing')}
-        else updatePreviewCard(i,'missing');
-      }catch{if(generation===S.previewGeneration)updatePreviewCard(i,'missing')}
-    }
-  }
-  const concurrency=Math.min(4,targets.length);await Promise.all(Array.from({length:concurrency},()=>worker()));
-}
+async function retryJob(id,btn){btn.disabled=true;try{const r=await fetch(`/api/jobs/${encodeURIComponent(id)}/retry`,{method:'POST'});const d=await r.json();if(!r.ok)throw Error(d.error||'Retry error');await jobs()}catch(e){$('err').textContent=e.message;btn.disabled=false}}
+async function deleteJob(id,title,btn){if(!confirm(`Xóa tiến trình "${title||id}" và toàn bộ file?`))return;btn.disabled=true;try{const r=await fetch(`/api/jobs/${encodeURIComponent(id)}`,{method:'DELETE'});if(!r.ok){let d={};try{d=await r.json()}catch{}throw Error(d.error||'Delete error')}await Promise.all([jobs(),health()])}catch(e){$('err').textContent=e.message;btn.disabled=false}}
 
-async function download(v,btn){
-  if(v?.mediaType==='image'){$('err').textContent='Candidate này là bài ảnh, không có video để Việt hóa.';return}
-  const original=btn?.textContent;if(btn){btn.disabled=true;btn.textContent='Đang kiểm tra + vào queue…'}
-  try{
-    const r=await fetch('/api/download',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({video:v})});
-    const d=await r.json();if(!r.ok)throw Error(d.error||'Download error');if(btn)btn.textContent='Đã vào queue';await jobs();
-  }catch(e){$('err').textContent=e.message;if(btn){btn.disabled=false;btn.textContent=original||'Tải + Việt hóa'}}
-}
+async function openSubtitle(job){S.editingJob=job;const modal=$('subtitleModal'),text=$('subtitleText');text.value='';$('subtitleMeta').textContent=`Job ${job.id} · đang tải SRT...`;modal.classList.add('open');try{const r=await fetch(`/api/jobs/${encodeURIComponent(job.id)}/subtitle`);const d=await r.json();if(!r.ok)throw Error(d.error||'Không đọc được subtitle');text.value=d.content||'';$('subtitleMeta').textContent=`Job ${job.id} · revision ${d.revision||0} · ${d.path||''}`}catch(e){$('subtitleMeta').textContent=e.message}}
+function closeSubtitle(){$('subtitleModal').classList.remove('open');S.editingJob=null}
+$('closeSubtitle').onclick=closeSubtitle;$('subtitleModal').onclick=e=>{if(e.target===$('subtitleModal'))closeSubtitle()};
+async function saveSubtitle(renderAfter=false){const job=S.editingJob;if(!job)return;const b=renderAfter?$('saveRenderSubtitle'):$('saveSubtitle'),old=b.textContent;b.disabled=true;b.textContent=renderAfter?'Đang lưu + render…':'Đang lưu…';try{let r=await fetch(`/api/jobs/${encodeURIComponent(job.id)}/subtitle`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:$('subtitleText').value})});let d=await r.json();if(!r.ok)throw Error(d.error||'Lưu subtitle lỗi');if(renderAfter){r=await fetch(`/api/jobs/${encodeURIComponent(job.id)}/subtitle/render`,{method:'POST'});d=await r.json();if(!r.ok)throw Error(d.error||'Render subtitle lỗi');closeSubtitle()}else $('subtitleMeta').textContent=`Job ${job.id} · đã lưu revision ${d.subtitleRevision||0}`;await jobs()}catch(e){$('err').textContent=e.message}finally{b.disabled=false;b.textContent=old}}
+$('saveSubtitle').onclick=()=>saveSubtitle(false);$('saveRenderSubtitle').onclick=()=>saveSubtitle(true);
+async function rerenderJob(job,btn){btn.disabled=true;try{const r=await fetch(`/api/jobs/${encodeURIComponent(job.id)}/subtitle/render`,{method:'POST'});const d=await r.json();if(!r.ok)throw Error(d.error||'Render subtitle lỗi');await jobs()}catch(e){$('err').textContent=e.message;btn.disabled=false}}
 
-async function retryJob(id,btn){
-  btn.disabled=true;btn.textContent='Đang xếp lại...';
-  try{const r=await fetch(`/api/jobs/${encodeURIComponent(id)}/retry`,{method:'POST'});const d=await r.json();if(!r.ok)throw Error(d.error||'Retry error');await jobs()}
-  catch(e){$('err').textContent=e.message;btn.disabled=false;btn.textContent='Thử lại'}
-}
+async function jobs(){try{const list=await fetch('/api/jobs').then(r=>r.json()),host=$('jobs');host.replaceChildren();if(!list.length){const e=document.createElement('div');e.className='empty';e.textContent='Chưa có job.';host.append(e);return}for(const j of list){const d=document.createElement('div');d.className='job';const title=j.video?.title||j.video?.id||'';const head=document.createElement('div');head.className='job-head';const left=document.createElement('div');const status=document.createElement('div');status.className='status '+(j.status==='done'?'ok':j.status.includes('failed')?'bad':'warn');status.textContent=`${statusLabel[j.status]||j.status} · ${title}`;left.append(status);const chips=document.createElement('div');chips.className='chips';const mode=document.createElement('span');mode.className=`mode-chip ${j.processingMode||'dub'}`;mode.textContent=modeLabel[j.processingMode||'dub']||j.processingMode;chips.append(mode);if(j.subtitleRevision){const rev=document.createElement('span');rev.className='chip';rev.textContent=`Sub r${j.subtitleRevision}`;chips.append(rev)}left.append(chips);head.append(left);d.append(head);const attempt=document.createElement('small');attempt.textContent=`Job ${j.id} · lần chạy ${j.attempts||1}`;d.append(attempt);if(j.localization){const info=document.createElement('small');info.textContent=`${j.localization.segments||0} đoạn · nguồn: ${j.localization.detectedLanguage||'?'} · output: ${j.output||''}`;d.append(info);if(j.localization.timings){const t=j.localization.timings;const perf=document.createElement('small');perf.textContent=`Whisper ${sec(t.transcribe)} · Dịch ${sec(t.translate)} · TTS ${sec(t.tts)} · Render ${sec(t.render)} · Tổng ${sec(t.total)}`;d.append(perf)}}else if(j.output){const info=document.createElement('small');info.textContent=`Output: ${j.output}`;d.append(info)}if(j.error){const er=document.createElement('small');er.className='bad';er.textContent=j.error;d.append(er)}const actions=document.createElement('div');actions.className='job-actions';if(j.status==='failed'||j.status==='localization_failed'){const retry=document.createElement('button');retry.textContent='Thử lại';retry.onclick=()=>retryJob(j.id,retry);actions.append(retry)}if(j.localization?.vietnameseSubtitle){const edit=document.createElement('button');edit.className='secondary';edit.textContent='Sửa sub';edit.onclick=()=>openSubtitle(j);actions.append(edit);const rerender=document.createElement('button');rerender.className='secondary';rerender.textContent='Render lại sub';rerender.disabled=j.status==='rendering';rerender.onclick=()=>rerenderJob(j,rerender);actions.append(rerender)}const del=document.createElement('button');del.className='danger';del.textContent='Xóa tiến trình';del.onclick=()=>deleteJob(j.id,title,del);actions.append(del);d.append(actions);host.append(d)}}catch(e){$('err').textContent=e.message}}
 
-async function deleteJob(id,title,btn){
-  if(!confirm(`Xóa tiến trình "${title||id}"?\n\nJob đang chạy sẽ bị dừng và toàn bộ file đã tải/xử lý của job này sẽ bị xóa.`))return;
-  btn.disabled=true;btn.textContent='Đang xóa...';
-  try{const r=await fetch(`/api/jobs/${encodeURIComponent(id)}`,{method:'DELETE'});if(!r.ok){let d={};try{d=await r.json()}catch{};throw Error(d.error||'Delete error')}await Promise.all([jobs(),health()])}
-  catch(e){$('err').textContent=e.message;btn.disabled=false;btn.textContent='Xóa tiến trình'}
-}
-
-$('downloadSelected').onclick=async()=>{for(const i of [...S.selected]){const v=S.results[i];if(v?.mediaType!=='image')await download(v)}S.selected.clear();render()};
-$('downloadTop').onclick=async()=>{const n=+$('topN').value;const eligible=S.results.filter(v=>v.mediaType!=='image').slice(0,n);$('downloadTop').disabled=true;for(const v of eligible)await download(v);await jobs();render()};
-$('topN').onchange=()=>render();
-
-async function jobs(){
-  try{
-    const list=await fetch('/api/jobs').then(r=>r.json()),host=$('jobs');host.replaceChildren();
-    for(const j of list){
-      const d=document.createElement('div');d.className='job';const title=j.video?.title||j.video?.id||'';
-      const s=document.createElement('div');s.className='status '+(j.status==='done'?'ok':j.status.includes('failed')?'bad':'warn');s.textContent=`${statusLabel[j.status]||j.status} · ${title}`;d.append(s);
-      const attempt=document.createElement('small');attempt.textContent=`Job ${j.id} · lần chạy ${j.attempts||1}`;d.append(attempt);
-      if(j.localization){
-        const info=document.createElement('small');info.textContent=`${j.localization.segments||0} đoạn · nguồn: ${j.localization.detectedLanguage||'?'} · ${j.localization.worker?'persistent worker':'one-shot'} · output: ${j.output||''}`;d.append(info);
-        if(j.localization.timings){const t=j.localization.timings;const perf=document.createElement('small');perf.textContent=`Hiệu năng: Whisper ${sec(t.transcribe)} · Dịch ${sec(t.translate)} · TTS ${sec(t.tts)} · Render ${sec(t.render)} · Tổng ${sec(t.total)}`;d.append(perf)}
-        if(j.localization.cacheHits?.length){const cache=document.createElement('small');cache.className='ok';cache.textContent=`Cache hit: ${j.localization.cacheHits.join(', ')}`;d.append(cache)}
-      }else if(j.output){const info=document.createElement('small');info.textContent=`Output: ${j.output}`;d.append(info)}
-      if(j.error){const er=document.createElement('small');er.className='bad';er.textContent=j.error;d.append(er)}
-      const actions=document.createElement('div');actions.className='job-actions';
-      if(j.status==='failed'||j.status==='localization_failed'){const retry=document.createElement('button');retry.textContent='Thử lại';retry.onclick=()=>retryJob(j.id,retry);actions.append(retry)}
-      const del=document.createElement('button');del.className='danger';del.textContent='Xóa tiến trình';del.onclick=()=>deleteJob(j.id,title,del);actions.append(del);d.append(actions);host.append(d)
-    }
-  }catch{}
-}
-$('refresh').onclick=jobs;health();jobs();setInterval(()=>{jobs();health()},5000);
+buildSources();refreshModeUI();$('refresh').onclick=jobs;health();jobs();setInterval(()=>{jobs();health()},5000);
 </script>
 </body>
 </html>
