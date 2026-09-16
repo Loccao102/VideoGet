@@ -1,1 +1,0 @@
-Douyin CDP runtime hardening validation marker.
