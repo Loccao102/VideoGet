@@ -57,6 +57,8 @@ func (s *jobStore) init() error {
 			localization_json TEXT,
 			error TEXT NOT NULL DEFAULT '',
 			attempts INTEGER NOT NULL DEFAULT 1,
+			processing_mode TEXT NOT NULL DEFAULT 'dub',
+			subtitle_revision INTEGER NOT NULL DEFAULT 0,
 			created_at INTEGER NOT NULL,
 			updated_at INTEGER NOT NULL
 		)`,
@@ -66,6 +68,40 @@ func (s *jobStore) init() error {
 		if _, err := s.db.Exec(statement); err != nil {
 			return fmt.Errorf("initialize job database: %w", err)
 		}
+	}
+	if err := s.ensureColumn("processing_mode", "TEXT NOT NULL DEFAULT 'dub'"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("subtitle_revision", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *jobStore) ensureColumn(name, definition string) error {
+	rows, err := s.db.Query("PRAGMA table_info(jobs)")
+	if err != nil {
+		return fmt.Errorf("inspect jobs schema: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var columnName, columnType string
+		var notNull int
+		var defaultValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &columnName, &columnType, &notNull, &defaultValue, &pk); err != nil {
+			return fmt.Errorf("scan jobs schema: %w", err)
+		}
+		if columnName == name {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate jobs schema: %w", err)
+	}
+	if _, err := s.db.Exec("ALTER TABLE jobs ADD COLUMN " + name + " " + definition); err != nil {
+		return fmt.Errorf("add jobs.%s: %w", name, err)
 	}
 	return nil
 }
@@ -87,8 +123,8 @@ func (s *jobStore) Upsert(job Job) error {
 	_, err = s.db.Exec(`
 		INSERT INTO jobs (
 			id, status, video_json, source_output, output, localization_json,
-			error, attempts, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			error, attempts, processing_mode, subtitle_revision, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			status = excluded.status,
 			video_json = excluded.video_json,
@@ -97,6 +133,8 @@ func (s *jobStore) Upsert(job Job) error {
 			localization_json = excluded.localization_json,
 			error = excluded.error,
 			attempts = excluded.attempts,
+			processing_mode = excluded.processing_mode,
+			subtitle_revision = excluded.subtitle_revision,
 			created_at = excluded.created_at,
 			updated_at = excluded.updated_at
 	`,
@@ -108,6 +146,8 @@ func (s *jobStore) Upsert(job Job) error {
 		localizationJSON,
 		job.Error,
 		job.Attempts,
+		normalizeProcessingMode(job.ProcessingMode),
+		job.SubtitleRevision,
 		job.CreatedAt.UnixNano(),
 		job.UpdatedAt.UnixNano(),
 	)
@@ -120,7 +160,7 @@ func (s *jobStore) Upsert(job Job) error {
 func (s *jobStore) LoadAll() ([]Job, error) {
 	rows, err := s.db.Query(`
 		SELECT id, status, video_json, source_output, output, localization_json,
-		       error, attempts, created_at, updated_at
+		       error, attempts, processing_mode, subtitle_revision, created_at, updated_at
 		FROM jobs
 		ORDER BY created_at DESC
 	`)
@@ -148,12 +188,15 @@ func (s *jobStore) LoadAll() ([]Job, error) {
 			&localizationJSON,
 			&job.Error,
 			&job.Attempts,
+			&job.ProcessingMode,
+			&job.SubtitleRevision,
 			&createdAt,
 			&updatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan job: %w", err)
 		}
 		job.Status = JobStatus(status)
+		job.ProcessingMode = normalizeProcessingMode(job.ProcessingMode)
 		job.CreatedAt = time.Unix(0, createdAt).UTC()
 		job.UpdatedAt = time.Unix(0, updatedAt).UTC()
 		if err := json.Unmarshal([]byte(videoJSON), &job.Video); err != nil {
