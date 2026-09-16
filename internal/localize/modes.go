@@ -14,18 +14,48 @@ import (
 const (
 	ModeSubtitles = "subtitles"
 	ModeDub       = "dub"
+	ModeOCRMusic  = "ocr_music"
 )
 
-// ProcessMode keeps the existing persistent worker for full dubbing jobs and
-// uses a dedicated one-shot script for subtitle-only jobs so TTS is never invoked.
+// ProcessMode keeps the persistent worker for full dubbing jobs and uses
+// dedicated one-shot scripts for modes that must never load Whisper/TTS.
 func (p *Processor) ProcessMode(ctx context.Context, input, mode string) (Result, error) {
 	mode = strings.ToLower(strings.TrimSpace(mode))
 	if mode == "" || mode == ModeDub {
 		return p.Process(ctx, input)
 	}
-	if mode != ModeSubtitles {
+
+	var script string
+	var label string
+	switch mode {
+	case ModeSubtitles:
+		script = strings.TrimSpace(os.Getenv("SUBTITLE_LOCALIZE_SCRIPT"))
+		if script == "" {
+			script = firstExisting(
+				"/app/scripts/localize_subtitles.py",
+				filepath.FromSlash("scripts/localize_subtitles.py"),
+			)
+		}
+		label = "subtitle localization"
+	case ModeOCRMusic:
+		script = strings.TrimSpace(os.Getenv("OCR_MUSIC_SCRIPT"))
+		if script == "" {
+			script = firstExisting(
+				"/app/scripts/localize_ocr_music.py",
+				filepath.FromSlash("scripts/localize_ocr_music.py"),
+			)
+		}
+		label = "OCR + music localization"
+	default:
 		return Result{}, fmt.Errorf("unsupported localization mode %q", mode)
 	}
+	if script == "" {
+		return Result{}, fmt.Errorf("%s script not found", label)
+	}
+	return p.processOneShotMode(ctx, input, script, label)
+}
+
+func (p *Processor) processOneShotMode(ctx context.Context, input, script, label string) (Result, error) {
 	if !p.Enabled() {
 		return Result{OutputVideo: input}, nil
 	}
@@ -40,17 +70,6 @@ func (p *Processor) ProcessMode(ctx context.Context, input, mode string) (Result
 	}
 	if _, err := os.Stat(input); err != nil {
 		return Result{}, fmt.Errorf("input video does not exist: %w", err)
-	}
-
-	script := strings.TrimSpace(os.Getenv("SUBTITLE_LOCALIZE_SCRIPT"))
-	if script == "" {
-		script = firstExisting(
-			"/app/scripts/localize_subtitles.py",
-			filepath.FromSlash("scripts/localize_subtitles.py"),
-		)
-	}
-	if script == "" {
-		return Result{}, fmt.Errorf("subtitle localization script not found")
 	}
 
 	select {
@@ -78,11 +97,11 @@ func (p *Processor) ProcessMode(ctx context.Context, input, mode string) (Result
 		if message == "" {
 			message = err.Error()
 		}
-		return Result{}, fmt.Errorf("subtitle localization failed: %s", message)
+		return Result{}, fmt.Errorf("%s failed: %s", label, message)
 	}
 	var result Result
 	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &result); err != nil {
-		return Result{}, fmt.Errorf("decode subtitle localization result: %w; output=%q", err, strings.TrimSpace(stdout.String()))
+		return Result{}, fmt.Errorf("decode %s result: %w; output=%q", label, err, strings.TrimSpace(stdout.String()))
 	}
 	return validateResult(result)
 }
