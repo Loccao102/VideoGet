@@ -26,6 +26,7 @@ import cv2
 import localize as base
 import localize_fast as fast  # noqa: F401 - installs optimized translation overrides on base
 import localize_ocr_music as ocr
+import ocr_segment_regions
 
 
 def video_codec(path: Path) -> str:
@@ -140,17 +141,34 @@ def main() -> None:
     vi_srt = output_dir / f"{stem}.ocr.vi.srt"
     output_video = output_dir / f"{stem}.ocr-vi-subbed.mp4"
     metadata_path = output_dir / f"{stem}.ocr-subtitles.json"
-    timings: dict[str, float] = {"transcribe": 0.0, "tts": 0.0, "music": 0.0, "decodeProxy": 0.0}
+    timings: dict[str, float] = {
+        "transcribe": 0.0,
+        "tts": 0.0,
+        "music": 0.0,
+        "decodeProxy": 0.0,
+        "bbox": 0.0,
+    }
     started = time.perf_counter()
 
     proxy_started = time.perf_counter()
     ocr_input, proxy_used, source_codec = prepare_ocr_input(input_path, output_dir)
     timings["decodeProxy"] = round(time.perf_counter() - proxy_started, 3) if proxy_used else 0.0
 
+    bbox_attached = 0
     try:
         ocr_started = time.perf_counter()
         segments, boxes, video_info = ocr.extract_segments(ocr_input, output_dir)
         timings["ocr"] = round(time.perf_counter() - ocr_started, 3)
+
+        if segments:
+            bbox_started = time.perf_counter()
+            try:
+                bbox_attached = ocr_segment_regions.attach_segment_bboxes(
+                    ocr_input, segments, video_info
+                )
+            except Exception as error:
+                base.log(f"OCR segment bbox unavailable; global region fallback will be used: {error}")
+            timings["bbox"] = round(time.perf_counter() - bbox_started, 3)
     finally:
         if proxy_used and ocr_input != input_path and not ocr.env_bool("OCR_KEEP_DECODE_PROXY", False):
             try:
@@ -199,6 +217,7 @@ def main() -> None:
             "modelSize": os.getenv("OCR_MODEL_SIZE", "small"),
             "minConfidence": ocr.env_float("OCR_MIN_CONFIDENCE", 0.65),
             "textRegion": text_region,
+            "segmentBBoxCount": bbox_attached,
         },
         "timings": timings,
     }
