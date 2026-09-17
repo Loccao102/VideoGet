@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -174,20 +176,18 @@ def _visual_fallback(frames, width: int, height: int) -> dict | None:
     }
 
 
-def detect(input_path: Path) -> dict | None:
-    """Detect whether the persistent Bilibili uploader mark is top-left or top-right."""
-    if not env_bool("OCR_OVERLAY_BILIBILI_AUTO_DETECT", True):
-        return None
+def _detect_cv(input_path: Path) -> tuple[dict | None, int]:
     try:
         import cv2
         import numpy as np
         import localize_ocr_music as ocr
     except Exception:
-        return None
+        return None, 0
 
     cap = cv2.VideoCapture(str(input_path))
     if not cap.isOpened():
-        return None
+        return None, 0
+    frames = []
     try:
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
@@ -195,7 +195,7 @@ def detect(input_path: Path) -> dict | None:
         frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
         duration = frame_count / fps if frame_count > 0 and fps > 0 else 0.0
         if width <= 0 or height <= 0 or duration <= 0:
-            return None
+            return None, 0
 
         samples = env_int("OCR_OVERLAY_BILIBILI_SAMPLES", 6, 3)
         top_ratio = clamp(env_float("OCR_OVERLAY_BILIBILI_TOP_BAND", 0.20, 0.08), 0.08, 0.35)
@@ -203,7 +203,6 @@ def detect(input_path: Path) -> dict | None:
         sample_times = np.linspace(duration * 0.08, duration * 0.92, samples)
         engine = ocr.make_ocr_engine()
         observations: list[dict] = []
-        frames = []
 
         for sample_index, timestamp in enumerate(sample_times):
             cap.set(cv2.CAP_PROP_POS_MSEC, float(timestamp) * 1000.0)
@@ -239,10 +238,45 @@ def detect(input_path: Path) -> dict | None:
 
         detected = choose_persistent_region(observations, max(1, len(frames)))
         if detected is not None:
-            return detected
-        return _visual_fallback(frames, width, height)
+            return detected, len(frames)
+        return _visual_fallback(frames, width, height), len(frames)
     finally:
         cap.release()
+
+
+def _proxy_for_detection(input_path: Path, target: Path) -> bool:
+    cmd = [
+        "ffmpeg", "-y", "-loglevel", "error", "-hwaccel", "none",
+        "-i", str(input_path), "-map", "0:v:0", "-an",
+        "-vf", "scale='min(960,iw)':-2",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "30",
+        "-pix_fmt", "yuv420p", str(target),
+    ]
+    process = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    return process.returncode == 0 and target.exists() and target.stat().st_size > 0
+
+
+def detect(input_path: Path) -> dict | None:
+    """Detect whether the persistent Bilibili uploader mark is top-left or top-right."""
+    if not env_bool("OCR_OVERLAY_BILIBILI_AUTO_DETECT", True):
+        return None
+    detected, decoded_frames = _detect_cv(input_path)
+    if detected is not None or decoded_frames >= 3:
+        return detected
+
+    if not env_bool("OCR_OVERLAY_BILIBILI_DECODE_PROXY", True):
+        return None
+    try:
+        with tempfile.TemporaryDirectory(prefix="videoget-brand-") as tmp:
+            proxy = Path(tmp) / "detect.mp4"
+            if not _proxy_for_detection(input_path, proxy):
+                return None
+            detected, _ = _detect_cv(proxy)
+            if detected is not None:
+                detected["decodeProxyUsed"] = True
+            return detected
+    except Exception:
+        return None
 
 
 def side_from_regions(regions: list[dict]) -> str:
