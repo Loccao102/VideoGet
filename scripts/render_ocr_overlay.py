@@ -1,16 +1,5 @@
 #!/usr/bin/env python3
-"""Render edited Vietnamese OCR subtitles back onto the source video.
-
-New OCR jobs store one normalized bbox per timed OCR segment. This renderer matches
-edited SRT entries back to those OCR segments by timestamp, so each Vietnamese line
-can cover and occupy the source-caption area that produced it.
-
-Rules:
-- lower caption: black box centered on the source bbox + white Vietnamese text;
-- upper/middle caption: blur only the source text bbox + white Vietnamese text there;
-- Bilibili: optionally blur the channel/watermark strip near the top-right;
-- old jobs or heavily retimed SRT entries fall back to the video-level OCR region.
-"""
+"""Render Vietnamese OCR subtitles at source positions and replace Bilibili branding."""
 from __future__ import annotations
 
 import argparse
@@ -19,11 +8,10 @@ import os
 import re
 from pathlib import Path
 
+import bilibili_brand
+import brand_badge
 import localize as base
 import smart_render as smart
-
-
-DEFAULT_BILIBILI_REGIONS = "0.72,0.010,0.27,0.085"
 
 
 def clamp(value: float, lo: float, hi: float) -> float:
@@ -50,12 +38,7 @@ def normalize_region(raw, fallback=(0.06, 0.72, 0.88, 0.18), *, pad: bool = True
     return nx, ny, right - nx, bottom - ny
 
 
-def expand_min_region(
-    region: tuple[float, float, float, float],
-    min_width: float,
-    min_height: float,
-) -> tuple[float, float, float, float]:
-    """Grow a display box around its center without moving away from source text."""
+def expand_min_region(region: tuple[float, float, float, float], min_width: float, min_height: float) -> tuple[float, float, float, float]:
     x, y, w, h = region
     target_w = clamp(max(w, min_width), 0.02, 0.96)
     target_h = clamp(max(h, min_height), 0.02, 0.30)
@@ -96,9 +79,8 @@ def parse_srt(path: Path) -> list[dict]:
         if end <= start:
             continue
         body = "\\N".join(smart.ass_escape(line) for line in lines[timing_index + 1 :]).strip()
-        if not body:
-            continue
-        out.append({"start": start, "end": end, "text": body})
+        if body:
+            out.append({"start": start, "end": end, "text": body})
     return out
 
 
@@ -156,7 +138,6 @@ def attach_regions(entries: list[dict], metadata: dict, fallback_region: tuple[f
             if overlap > best_overlap:
                 best_overlap = overlap
                 best = segment
-
         if best is None and segments:
             candidate = min(segments, key=lambda item: abs(_center(entry) - _center(item)))
             if abs(_center(entry) - _center(candidate)) <= max_gap:
@@ -178,30 +159,16 @@ def attach_regions(entries: list[dict], metadata: dict, fallback_region: tuple[f
             is_bottom = placement == "bottom"
         else:
             is_bottom = source_region[1] + source_region[3] >= threshold
-
         entry["sourceRegion"] = source_region
         entry["bottom"] = is_bottom
-        entry["region"] = (
-            expand_min_region(source_region, min_bottom_width, min_bottom_height)
-            if is_bottom
-            else source_region
-        )
-
+        entry["region"] = expand_min_region(source_region, min_bottom_width, min_bottom_height) if is_bottom else source_region
     return matched
 
 
 def build_positioned_ass(entries: list[dict], ass_path: Path, width: int, height: int) -> None:
     font = os.getenv("VIDEO_SUBTITLE_FONT", "Noto Sans")
-    bottom_size = smart.env_int(
-        "OCR_OVERLAY_BOTTOM_FONT_SIZE",
-        smart.env_int("OCR_OVERLAY_FONT_SIZE", max(18, min(44, int(min(width, height) * 0.050))), 12),
-        12,
-    )
-    upper_size = smart.env_int(
-        "OCR_OVERLAY_UPPER_FONT_SIZE",
-        smart.env_int("OCR_OVERLAY_FONT_SIZE", max(18, min(40, int(min(width, height) * 0.044))), 12),
-        12,
-    )
+    bottom_size = smart.env_int("OCR_OVERLAY_BOTTOM_FONT_SIZE", smart.env_int("OCR_OVERLAY_FONT_SIZE", max(18, min(44, int(min(width, height) * 0.050))), 12), 12)
+    upper_size = smart.env_int("OCR_OVERLAY_UPPER_FONT_SIZE", smart.env_int("OCR_OVERLAY_FONT_SIZE", max(18, min(40, int(min(width, height) * 0.044))), 12), 12)
     bottom_outline = smart.env_float("OCR_OVERLAY_TEXT_OUTLINE", 1.6, 0.0)
     upper_outline = smart.env_float("OCR_OVERLAY_UPPER_TEXT_OUTLINE", 2.2, 0.0)
     margin_lr = max(12, int(width * 0.04))
@@ -213,43 +180,58 @@ def build_positioned_ass(entries: list[dict], ass_path: Path, width: int, height
         anchor_y = int((y + h / 2.0) * height)
         style = "OCRBottom" if entry.get("bottom") else "OCRUpper"
         events.append(
-            "Dialogue: 0,{start},{end},{style},,0,0,0,,"
-            "{{\\an5\\pos({x},{y})\\q2}}{text}".format(
-                start=ass_time(float(entry["start"])),
-                end=ass_time(float(entry["end"])),
-                style=style,
-                x=anchor_x,
-                y=anchor_y,
-                text=entry["text"],
+            "Dialogue: 0,{start},{end},{style},,0,0,0,,{{\\an5\\pos({x},{y})\\q2}}{text}".format(
+                start=ass_time(float(entry["start"])), end=ass_time(float(entry["end"])),
+                style=style, x=anchor_x, y=anchor_y, text=entry["text"],
             )
         )
     ass_path.write_text(header + "\n".join(events) + "\n", encoding="utf-8")
 
 
-def add_bilibili_cleanup(
-    filters: list[str],
-    video_label: str,
-    start_index: int,
-    platform: str,
-) -> tuple[str, int]:
+def _region_dict(raw) -> dict:
+    x, y, w, h = normalize_region(raw, pad=False)
+    return {"x": x, "y": y, "w": w, "h": h, "confidence": 1.0}
+
+
+def resolve_bilibili_brand(input_path: Path, metadata: dict, platform: str) -> tuple[list[dict], str, dict | None]:
     if platform.lower().strip() != "bilibili" or not smart.env_bool("OCR_OVERLAY_HIDE_BILIBILI", True):
-        return video_label, start_index
-    raw = os.getenv("OCR_OVERLAY_BILIBILI_REGIONS", DEFAULT_BILIBILI_REGIONS)
+        return [], "", None
+
+    manual_raw = os.getenv("OCR_OVERLAY_BILIBILI_MANUAL_REGIONS", "").strip()
+    if manual_raw:
+        regions = smart.parse_regions(manual_raw, "bilibili_watermark")
+        side = bilibili_brand.side_from_regions(regions)
+        return regions, side, {"source": "manual", "side": side}
+
+    cached = metadata.get("bilibiliBrand") if isinstance(metadata.get("bilibiliBrand"), dict) else None
+    if cached and not smart.env_bool("OCR_OVERLAY_BILIBILI_REDETECT", False):
+        raw = cached.get("region")
+        if isinstance(raw, (list, tuple)) and len(raw) == 4 and cached.get("side") in {"left", "right"}:
+            return [_region_dict(raw)], str(cached["side"]), cached
+
+    detected = bilibili_brand.detect(input_path)
+    if detected and detected.get("region") and detected.get("side") in {"left", "right"}:
+        metadata["bilibiliBrand"] = detected
+        return [_region_dict(detected["region"])], str(detected["side"]), detected
+
+    fallback_raw = os.getenv("OCR_OVERLAY_BILIBILI_REGIONS", "").strip()
+    if fallback_raw:
+        regions = smart.parse_regions(fallback_raw, "bilibili_watermark_fallback")
+        side = bilibili_brand.side_from_regions(regions)
+        return regions, side, {"source": "fallback", "side": side}
+    return [], "", None
+
+
+def add_bilibili_cleanup(filters: list[str], video_label: str, start_index: int, regions: list[dict]) -> tuple[str, int]:
     radius = smart.env_int("OCR_OVERLAY_BILIBILI_BLUR", 17, 2)
     index = start_index
-    for region in smart.parse_regions(raw, "bilibili_watermark"):
+    for region in regions:
         video_label = smart.add_blur_region(filters, video_label, index, region, radius)
         index += 1
     return video_label, index
 
 
-def render(
-    input_path: Path,
-    subtitle_path: Path,
-    metadata_path: Path,
-    output_path: Path,
-    platform: str,
-) -> None:
+def render(input_path: Path, subtitle_path: Path, metadata_path: Path, output_path: Path, platform: str) -> None:
     for path in (input_path, subtitle_path, metadata_path):
         if not path.exists():
             raise FileNotFoundError(path)
@@ -266,68 +248,73 @@ def render(
     video_label = "0:v"
     cleanup_index = 0
 
-    video_label, cleanup_index = add_bilibili_cleanup(
-        filters, video_label, cleanup_index, platform
-    )
+    brand_regions, brand_side, brand_detection = resolve_bilibili_brand(input_path, metadata, platform)
+    video_label, cleanup_index = add_bilibili_cleanup(filters, video_label, cleanup_index, brand_regions)
 
-    alpha = clamp(smart.env_float("OCR_OVERLAY_BOTTOM_BOX_ALPHA", 0.92, 0.0), 0.0, 1.0)
-    blur = smart.env_int("OCR_OVERLAY_SOURCE_BLUR", 13, 2)
+    alpha = clamp(smart.env_float("OCR_OVERLAY_BOTTOM_BOX_ALPHA", 0.88, 0.0), 0.0, 1.0)
+    blur = smart.env_int("OCR_OVERLAY_SOURCE_BLUR", 11, 2)
     max_segments = smart.env_int("OCR_OVERLAY_MAX_SEGMENTS", 240, 10)
 
     for entry in entries[:max_segments]:
-        display_x, display_y, display_w, display_h = entry["region"]
-        source_x, source_y, source_w, source_h = entry.get("sourceRegion", entry["region"])
+        x, y, w, h = entry["region"]
         enable = f"between(t,{float(entry['start']):.3f},{float(entry['end']):.3f})"
         if entry.get("bottom"):
             out = f"ocrbox{cleanup_index}"
             filters.append(
-                f"[{video_label}]drawbox=x=iw*{display_x:.5f}:y=ih*{display_y:.5f}:"
-                f"w=iw*{display_w:.5f}:h=ih*{display_h:.5f}:color=black@{alpha:.3f}:t=fill:"
-                f"enable='{enable}'[{out}]"
+                f"[{video_label}]drawbox=x=iw*{x:.5f}:y=ih*{y:.5f}:w=iw*{w:.5f}:h=ih*{h:.5f}:"
+                f"color=black@{alpha:.3f}:t=fill:enable='{enable}'[{out}]"
             )
             video_label = out
             cleanup_index += 1
         else:
-            region_dict = {
-                "x": source_x,
-                "y": source_y,
-                "w": source_w,
-                "h": source_h,
-                "confidence": 1.0,
-            }
-            video_label = smart.add_blur_region(
-                filters, video_label, cleanup_index, region_dict, blur, enable
-            )
+            source_x, source_y, source_w, source_h = entry.get("sourceRegion", entry["region"])
+            region_dict = {"x": source_x, "y": source_y, "w": source_w, "h": source_h, "confidence": 1.0}
+            video_label = smart.add_blur_region(filters, video_label, cleanup_index, region_dict, blur, enable)
             cleanup_index += 1
-
-    if len(entries) > max_segments:
-        base.log(f"OCR overlay: cleanup limited to first {max_segments}/{len(entries)} subtitle entries")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     ass_path = output_path.parent / f"{output_path.stem}.ass"
     build_positioned_ass(entries, ass_path, width, height)
     escaped = base.escape_subtitle_path(ass_path)
-    filters.append(f"[{video_label}]subtitles='{escaped}'[vout]")
+    subtitle_label = "ocrsubbed"
+    filters.append(f"[{video_label}]subtitles='{escaped}'[{subtitle_label}]")
+    video_label = subtitle_label
 
-    cmd = ["ffmpeg", "-y", "-i", str(input_path), "-filter_complex", ";".join(filters), "-map", "[vout]"]
+    badge_path = None
+    if platform.lower().strip() == "bilibili" and brand_side in {"left", "right"}:
+        badge_path = brand_badge.ensure(output_path.parent)
+        if badge_path is not None:
+            badge_width = max(120, int(width * smart.env_float("BRAND_WATERMARK_WIDTH", 0.20, 0.08)))
+            margin_x = max(4, int(width * smart.env_float("BRAND_WATERMARK_MARGIN_X", 0.012, 0.0)))
+            margin_y = max(4, int(height * smart.env_float("BRAND_WATERMARK_MARGIN_Y", 0.012, 0.0)))
+            filters.append(f"[1:v]scale={badge_width}:-1[brandbadge]")
+            overlay_x = str(margin_x) if brand_side == "left" else f"W-w-{margin_x}"
+            branded = "brandout"
+            filters.append(
+                f"[{video_label}][brandbadge]overlay=x={overlay_x}:y={margin_y}:format=auto:eof_action=repeat[{branded}]"
+            )
+            video_label = branded
+
+    if video_label != "vout":
+        filters.append(f"[{video_label}]null[vout]")
+
+    cmd = ["ffmpeg", "-y", "-i", str(input_path)]
+    if badge_path is not None:
+        cmd += ["-i", str(badge_path)]
+    cmd += ["-filter_complex", ";".join(filters), "-map", "[vout]"]
     if base.has_audio_stream(input_path):
         cmd += ["-map", "0:a:0", "-c:a", "aac", "-b:a", "192k"]
     cmd += [
-        "-c:v",
-        "libx264",
-        "-preset",
-        os.getenv("VIDEO_PRESET", "veryfast"),
-        "-crf",
-        os.getenv("VIDEO_CRF", "21"),
-        "-pix_fmt",
-        "yuv420p",
-        "-movflags",
-        "+faststart",
+        "-c:v", "libx264", "-preset", os.getenv("VIDEO_PRESET", "veryfast"),
+        "-crf", os.getenv("VIDEO_CRF", "21"), "-pix_fmt", "yuv420p", "-movflags", "+faststart",
         str(output_path),
     ]
+
+    if brand_detection is not None:
+        metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
     base.log(
-        f"OCR overlay render: platform={platform or 'unknown'}, "
-        f"segment bbox matched={matched}/{len(entries)}"
+        f"OCR overlay render: platform={platform or 'unknown'}, segment bbox matched={matched}/{len(entries)}, "
+        f"brandSide={brand_side or 'none'}, brandDetect={(brand_detection or {}).get('source', 'none')}"
     )
     base.run(cmd)
 
@@ -340,13 +327,7 @@ def main() -> None:
     parser.add_argument("--output", required=True)
     parser.add_argument("--platform", default="")
     args = parser.parse_args()
-    render(
-        Path(args.input).resolve(),
-        Path(args.subtitle).resolve(),
-        Path(args.metadata).resolve(),
-        Path(args.output).resolve(),
-        args.platform,
-    )
+    render(Path(args.input).resolve(), Path(args.subtitle).resolve(), Path(args.metadata).resolve(), Path(args.output).resolve(), args.platform)
 
 
 if __name__ == "__main__":
