@@ -62,13 +62,11 @@ class OCRSegmentRegionTests(unittest.TestCase):
         self.assertEqual(entries[0]["sourceRegion"], fallback)
         self.assertFalse(entries[0]["bboxMatched"])
 
-    def test_bilibili_default_cleanup_targets_top_right(self) -> None:
-        x, y, w, h = [float(value) for value in overlay.DEFAULT_BILIBILI_REGIONS.split(",")]
-        self.assertGreaterEqual(x, 0.65)
-        self.assertLess(y, 0.05)
-        self.assertGreater(w, 0.15)
-        self.assertLessEqual(x + w, 1.0)
-        self.assertLess(h, 0.12)
+    def test_bilibili_cleanup_is_not_hard_coded_to_one_side(self) -> None:
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        self.assertIn("bilibili_brand.detect(input_path)", source)
+        self.assertIn('brand_side in {"left", "right"}', source)
+        self.assertNotIn("DEFAULT_BILIBILI_REGIONS", source)
 
 
 class OCRDefaultRenderTests(unittest.TestCase):

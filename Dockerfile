@@ -25,13 +25,15 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 # yt-dlp remains for the existing Bilibili/public-source branches. Douyin no longer calls it.
 # Chromium + aiohttp are used by the Douyin native-search CDP helper/browser fallback paths.
-# RapidOCR + ONNX Runtime power the CPU-local OCR+Music mode without PaddlePaddle/CUDA.
+# RapidOCR + ONNX Runtime power the CPU-local OCR modes without PaddlePaddle/CUDA.
+# Pillow generates the transparent Xứ Sở Nhiều Lông badge used by Bilibili brand replacement.
 RUN pip install --no-cache-dir \
     yt-dlp==2026.8.19 \
     aiohttp \
     faster-whisper \
     edge-tts==7.2.8 \
     pydub \
+    Pillow \
     opencv-python-headless \
     'rapidocr>=3.9.0,<4' \
     onnxruntime
@@ -42,7 +44,7 @@ COPY scripts /app/scripts
 COPY assets /app/assets
 
 WORKDIR /app
-RUN mkdir -p /app/downloads /app/assets/music /root/.cache
+RUN mkdir -p /app/downloads /app/assets/music /app/assets/brand /root/.cache
 
 ENV PYTHONUNBUFFERED=1 \
     ADDR=:8080 \
@@ -98,6 +100,17 @@ ENV PYTHONUNBUFFERED=1 \
     OCR_SOURCE_LANGUAGE=zh \
     OCR_TRANSLATE=true \
     OCR_REMOVE_SOURCE_TEXT=true \
+    OCR_OVERLAY_HIDE_BILIBILI=true \
+    OCR_OVERLAY_BILIBILI_AUTO_DETECT=true \
+    OCR_OVERLAY_BILIBILI_DECODE_PROXY=true \
+    OCR_OVERLAY_BILIBILI_SAMPLES=6 \
+    OCR_OVERLAY_BILIBILI_TOP_BAND=0.20 \
+    OCR_OVERLAY_BILIBILI_OCR_CONFIDENCE=0.48 \
+    OCR_OVERLAY_BILIBILI_MIN_HITS=2 \
+    BRAND_WATERMARK_ENABLED=true \
+    BRAND_WATERMARK_WIDTH=0.20 \
+    BRAND_WATERMARK_MARGIN_X=0.012 \
+    BRAND_WATERMARK_MARGIN_Y=0.012 \
     OCR_MUSIC_DIR=/app/assets/music \
     OCR_MUSIC_REQUIRED=true \
     OCR_MUSIC_VOLUME=0.18 \
