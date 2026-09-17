@@ -3,12 +3,12 @@
 
 New OCR jobs store one normalized bbox per timed OCR segment. This renderer matches
 edited SRT entries back to those OCR segments by timestamp, so each Vietnamese line
-can cover and occupy the exact source-caption area that produced it.
+can cover and occupy the source-caption area that produced it.
 
 Rules:
-- lower caption: black box over that segment's source bbox + white Vietnamese text;
-- upper/middle caption: blur that segment's source bbox + white Vietnamese text;
-- Bilibili: optionally blur a conservative channel/watermark strip near the top;
+- lower caption: black box centered on the source bbox + white Vietnamese text;
+- upper/middle caption: blur only the source text bbox + white Vietnamese text there;
+- Bilibili: optionally blur the channel/watermark strip near the top-right;
 - old jobs or heavily retimed SRT entries fall back to the video-level OCR region.
 """
 from __future__ import annotations
@@ -21,6 +21,9 @@ from pathlib import Path
 
 import localize as base
 import smart_render as smart
+
+
+DEFAULT_BILIBILI_REGIONS = "0.72,0.010,0.27,0.085"
 
 
 def clamp(value: float, lo: float, hi: float) -> float:
@@ -45,6 +48,22 @@ def normalize_region(raw, fallback=(0.06, 0.72, 0.88, 0.18), *, pad: bool = True
     right = clamp(x + w + pad_x, nx + 0.02, 1.0)
     bottom = clamp(y + h + pad_y, ny + 0.02, 1.0)
     return nx, ny, right - nx, bottom - ny
+
+
+def expand_min_region(
+    region: tuple[float, float, float, float],
+    min_width: float,
+    min_height: float,
+) -> tuple[float, float, float, float]:
+    """Grow a display box around its center without moving away from source text."""
+    x, y, w, h = region
+    target_w = clamp(max(w, min_width), 0.02, 0.96)
+    target_h = clamp(max(h, min_height), 0.02, 0.30)
+    cx = x + w / 2.0
+    cy = y + h / 2.0
+    nx = clamp(cx - target_w / 2.0, 0.0, 1.0 - target_w)
+    ny = clamp(cy - target_h / 2.0, 0.0, 1.0 - target_h)
+    return nx, ny, target_w, target_h
 
 
 def metadata_region(metadata: dict) -> tuple[float, float, float, float]:
@@ -125,6 +144,8 @@ def attach_regions(entries: list[dict], metadata: dict, fallback_region: tuple[f
     segments = metadata_segments(metadata)
     threshold = smart.env_float("OCR_OVERLAY_BOTTOM_THRESHOLD", 0.68, 0.0)
     max_gap = smart.env_float("OCR_OVERLAY_MATCH_MAX_GAP_SEC", 1.5, 0.0)
+    min_bottom_width = smart.env_float("OCR_OVERLAY_BOTTOM_MIN_WIDTH", 0.30, 0.02)
+    min_bottom_height = smart.env_float("OCR_OVERLAY_BOTTOM_MIN_HEIGHT", 0.055, 0.02)
     matched = 0
 
     for entry in entries:
@@ -142,22 +163,29 @@ def attach_regions(entries: list[dict], metadata: dict, fallback_region: tuple[f
                 best = candidate
 
         if best is not None:
-            region = best["bbox"]
+            source_region = best["bbox"]
             placement = best.get("placement", "")
             entry["bboxMatched"] = True
             entry["bboxConfidence"] = best.get("confidence", 0.0)
             matched += 1
         else:
-            region = fallback_region
+            source_region = fallback_region
             placement = ""
             entry["bboxMatched"] = False
             entry["bboxConfidence"] = 0.0
 
-        entry["region"] = region
         if placement in {"bottom", "upper"}:
-            entry["bottom"] = placement == "bottom"
+            is_bottom = placement == "bottom"
         else:
-            entry["bottom"] = region[1] + region[3] >= threshold
+            is_bottom = source_region[1] + source_region[3] >= threshold
+
+        entry["sourceRegion"] = source_region
+        entry["bottom"] = is_bottom
+        entry["region"] = (
+            expand_min_region(source_region, min_bottom_width, min_bottom_height)
+            if is_bottom
+            else source_region
+        )
 
     return matched
 
@@ -206,8 +234,8 @@ def add_bilibili_cleanup(
 ) -> tuple[str, int]:
     if platform.lower().strip() != "bilibili" or not smart.env_bool("OCR_OVERLAY_HIDE_BILIBILI", True):
         return video_label, start_index
-    raw = os.getenv("OCR_OVERLAY_BILIBILI_REGIONS", "0.012,0.012,0.38,0.085")
-    radius = smart.env_int("OCR_OVERLAY_BILIBILI_BLUR", 13, 2)
+    raw = os.getenv("OCR_OVERLAY_BILIBILI_REGIONS", DEFAULT_BILIBILI_REGIONS)
+    radius = smart.env_int("OCR_OVERLAY_BILIBILI_BLUR", 17, 2)
     index = start_index
     for region in smart.parse_regions(raw, "bilibili_watermark"):
         video_label = smart.add_blur_region(filters, video_label, index, region, radius)
@@ -242,24 +270,31 @@ def render(
         filters, video_label, cleanup_index, platform
     )
 
-    alpha = clamp(smart.env_float("OCR_OVERLAY_BOTTOM_BOX_ALPHA", 0.88, 0.0), 0.0, 1.0)
-    blur = smart.env_int("OCR_OVERLAY_SOURCE_BLUR", 11, 2)
+    alpha = clamp(smart.env_float("OCR_OVERLAY_BOTTOM_BOX_ALPHA", 0.92, 0.0), 0.0, 1.0)
+    blur = smart.env_int("OCR_OVERLAY_SOURCE_BLUR", 13, 2)
     max_segments = smart.env_int("OCR_OVERLAY_MAX_SEGMENTS", 240, 10)
 
     for entry in entries[:max_segments]:
-        x, y, w, h = entry["region"]
+        display_x, display_y, display_w, display_h = entry["region"]
+        source_x, source_y, source_w, source_h = entry.get("sourceRegion", entry["region"])
         enable = f"between(t,{float(entry['start']):.3f},{float(entry['end']):.3f})"
         if entry.get("bottom"):
             out = f"ocrbox{cleanup_index}"
             filters.append(
-                f"[{video_label}]drawbox=x=iw*{x:.5f}:y=ih*{y:.5f}:"
-                f"w=iw*{w:.5f}:h=ih*{h:.5f}:color=black@{alpha:.3f}:t=fill:"
+                f"[{video_label}]drawbox=x=iw*{display_x:.5f}:y=ih*{display_y:.5f}:"
+                f"w=iw*{display_w:.5f}:h=ih*{display_h:.5f}:color=black@{alpha:.3f}:t=fill:"
                 f"enable='{enable}'[{out}]"
             )
             video_label = out
             cleanup_index += 1
         else:
-            region_dict = {"x": x, "y": y, "w": w, "h": h, "confidence": 1.0}
+            region_dict = {
+                "x": source_x,
+                "y": source_y,
+                "w": source_w,
+                "h": source_h,
+                "confidence": 1.0,
+            }
             video_label = smart.add_blur_region(
                 filters, video_label, cleanup_index, region_dict, blur, enable
             )
