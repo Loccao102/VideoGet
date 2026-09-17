@@ -57,22 +57,16 @@ func (s *Server) rerenderSubtitle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	job, err := s.jobs.RerenderSubtitlesWithStyle(r.PathValue("id"), req.Style)
-	if err != nil {
-		status := http.StatusBadRequest
-		if strings.Contains(err.Error(), "not found") {
-			status = http.StatusNotFound
-		} else if strings.Contains(err.Error(), "currently running") {
-			status = http.StatusConflict
-		}
-		writeError(w, status, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusAccepted, job)
-}
 
-func (s *Server) reprocessOCR(w http.ResponseWriter, r *http.Request) {
-	job, err := s.jobs.ReprocessOCR(r.PathValue("id"))
+	var (
+		job any
+		err error
+	)
+	if strings.EqualFold(strings.TrimSpace(req.Style), "reprocess_ocr") {
+		job, err = s.jobs.ReprocessOCR(r.PathValue("id"))
+	} else {
+		job, err = s.jobs.RerenderSubtitlesWithStyle(r.PathValue("id"), req.Style)
+	}
 	if err != nil {
 		status := http.StatusBadRequest
 		if strings.Contains(err.Error(), "not found") {
