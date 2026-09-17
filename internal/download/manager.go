@@ -31,10 +31,11 @@ const (
 )
 
 const (
-	ProcessingDownload  = "download"
-	ProcessingSubtitles = "subtitles"
-	ProcessingDub       = "dub"
-	ProcessingOCRMusic  = "ocr_music"
+	ProcessingDownload     = "download"
+	ProcessingSubtitles    = "subtitles"
+	ProcessingDub          = "dub"
+	ProcessingOCRMusic     = "ocr_music"
+	ProcessingOCRSubtitles = "ocr_subtitles"
 )
 
 type Job struct {
@@ -401,10 +402,10 @@ func validateProcessingMode(mode string) (string, error) {
 		mode = ProcessingDub
 	}
 	switch mode {
-	case ProcessingDownload, ProcessingSubtitles, ProcessingDub, ProcessingOCRMusic:
+	case ProcessingDownload, ProcessingSubtitles, ProcessingDub, ProcessingOCRMusic, ProcessingOCRSubtitles:
 		return mode, nil
 	default:
-		return "", fmt.Errorf("processing mode must be download, subtitles, dub, or ocr_music")
+		return "", fmt.Errorf("processing mode must be download, subtitles, dub, ocr_music, or ocr_subtitles")
 	}
 }
 
