@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 )
@@ -46,7 +47,32 @@ func (s *Server) saveSubtitle(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) rerenderSubtitle(w http.ResponseWriter, r *http.Request) {
-	job, err := s.jobs.RerenderSubtitles(r.PathValue("id"))
+	var req struct {
+		Style string `json:"style"`
+	}
+	if r.Body != nil && r.ContentLength != 0 {
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+		if err := decoder.Decode(&req); err != nil && err != io.EOF {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+	}
+	job, err := s.jobs.RerenderSubtitlesWithStyle(r.PathValue("id"), req.Style)
+	if err != nil {
+		status := http.StatusBadRequest
+		if strings.Contains(err.Error(), "not found") {
+			status = http.StatusNotFound
+		} else if strings.Contains(err.Error(), "currently running") {
+			status = http.StatusConflict
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, job)
+}
+
+func (s *Server) reprocessOCR(w http.ResponseWriter, r *http.Request) {
+	job, err := s.jobs.ReprocessOCR(r.PathValue("id"))
 	if err != nil {
 		status := http.StatusBadRequest
 		if strings.Contains(err.Error(), "not found") {
