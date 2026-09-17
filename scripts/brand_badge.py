@@ -23,7 +23,7 @@ def _font(size: int):
 def generate(output_path: Path, text: str = "Xứ Sở Nhiều Lông") -> Path:
     from PIL import Image, ImageDraw
 
-    width, height = 900, 300
+    width, height = 1100, 300
     image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
     gold = (255, 184, 55, 255)
@@ -33,8 +33,9 @@ def generate(output_path: Path, text: str = "Xứ Sở Nhiều Lông") -> Path:
     gray = (125, 125, 130, 255)
     cream = (255, 190, 84, 255)
 
-    draw.rounded_rectangle((18, 72, 882, 244), radius=86, fill=dark, outline=gold, width=8)
+    draw.rounded_rectangle((18, 72, 1082, 244), radius=86, fill=dark, outline=gold, width=8)
 
+    # Cat head.
     draw.polygon([(62, 130), (92, 82), (116, 132)], fill=gray, outline=(35, 27, 22, 255))
     draw.polygon([(142, 132), (169, 82), (194, 138)], fill=gray, outline=(35, 27, 22, 255))
     draw.ellipse((68, 104, 194, 234), fill=gray, outline=(35, 27, 22, 255), width=6)
@@ -44,6 +45,7 @@ def generate(output_path: Path, text: str = "Xứ Sở Nhiều Lông") -> Path:
     draw.ellipse((129, 166, 140, 177), fill=pink)
     draw.arc((118, 167, 151, 197), 20, 160, fill=(25, 20, 18, 255), width=4)
 
+    # Dog head.
     draw.ellipse((175, 88, 314, 232), fill=cream, outline=(46, 30, 18, 255), width=6)
     draw.ellipse((157, 114, 202, 211), fill=(221, 145, 49, 255), outline=(46, 30, 18, 255), width=5)
     draw.ellipse((288, 114, 330, 211), fill=(221, 145, 49, 255), outline=(46, 30, 18, 255), width=5)
@@ -52,13 +54,14 @@ def generate(output_path: Path, text: str = "Xứ Sở Nhiều Lông") -> Path:
     draw.ellipse((239, 161, 258, 179), fill=(50, 31, 23, 255))
     draw.arc((226, 170, 274, 214), 10, 170, fill=(50, 31, 23, 255), width=5)
 
-    draw.ellipse((825, 132, 851, 158), fill=gold)
-    draw.ellipse((852, 120, 875, 148), fill=gold)
-    draw.ellipse((845, 167, 878, 199), fill=gold)
-    draw.ellipse((808, 167, 841, 199), fill=gold)
-    draw.ellipse((821, 150, 864, 193), fill=gold)
+    # Paw mark.
+    draw.ellipse((1020, 132, 1046, 158), fill=gold)
+    draw.ellipse((1047, 120, 1070, 148), fill=gold)
+    draw.ellipse((1040, 167, 1073, 199), fill=gold)
+    draw.ellipse((1003, 167, 1036, 199), fill=gold)
+    draw.ellipse((1016, 150, 1059, 193), fill=gold)
 
-    font = _font(84)
+    font = _font(64)
     split = "Nhiều Lông"
     prefix = text[:-len(split)].rstrip() + " " if text.endswith(split) else text + " "
     x, y = 335, 116
