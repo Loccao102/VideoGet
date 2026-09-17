@@ -78,7 +78,9 @@ def prepare_ocr_input(input_path: Path, output_dir: Path) -> tuple[Path, bool, s
     proxy = output_dir / f"{input_path.stem}.ocr-decode-proxy.mp4"
     preset = os.getenv("OCR_DECODE_PROXY_PRESET", "ultrafast").strip() or "ultrafast"
     crf = str(ocr.env_int("OCR_DECODE_PROXY_CRF", 28, 0))
-    threads = str(ocr.env_int("OCR_DECODE_PROXY_THREADS", 0, 0))
+    # Keep this numeric until the ffmpeg command is built. Converting it to str
+    # before the comparison causes Python 3 to raise: str > int.
+    threads = ocr.env_int("OCR_DECODE_PROXY_THREADS", 0, 0)
 
     reason = f"codec={codec or 'unknown'}" if codec else "OpenCV cannot decode source"
     if force_proxy:
@@ -107,7 +109,7 @@ def prepare_ocr_input(input_path: Path, output_dir: Path) -> tuple[Path, bool, s
         "yuv420p",
     ]
     if threads > 0:
-        cmd += ["-threads", threads]
+        cmd += ["-threads", str(threads)]
     cmd += ["-movflags", "+faststart", str(proxy)]
     base.run(cmd)
 
