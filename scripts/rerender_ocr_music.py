@@ -1,34 +1,30 @@
 #!/usr/bin/env python3
-"""Re-render an edited OCR subtitle while preserving OCR cleanup and music.
+"""Re-render edited OCR+Music subtitles with the shared OCR Overlay/brand policy.
 
 This path deliberately skips OCR, translation, Whisper and TTS. It reuses the
-metadata emitted by localize_ocr_music.py when available, then burns the edited
-SRT and rebuilds the same background-music mix.
+metadata emitted by the OCR+Music pipeline, overlays the edited Vietnamese SRT,
+replaces detected Bilibili branding when possible, then rebuilds the music mix.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import tempfile
 from pathlib import Path
 
 import localize as base
 import localize_ocr_music as ocr
+import render_ocr_overlay
 import smart_render as smart
 
 
 def probe_duration(path: Path) -> float:
     process = subprocess.run(
         [
-            "ffprobe",
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "default=noprint_wrappers=1:nokey=1",
-            str(path),
+            "ffprobe", "-v", "error", "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1", str(path),
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -45,8 +41,11 @@ def probe_duration(path: Path) -> float:
     return duration
 
 
-def load_metadata(input_path: Path, output_dir: Path) -> dict:
-    path = output_dir / f"{input_path.stem}.ocr-music.json"
+def metadata_path(input_path: Path, output_dir: Path) -> Path:
+    return output_dir / f"{input_path.stem}.ocr-music.json"
+
+
+def load_metadata(path: Path) -> dict:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
         return value if isinstance(value, dict) else {}
@@ -74,8 +73,19 @@ def resolve_music(input_path: Path, metadata: dict) -> Path | None:
     return ocr.choose_music(input_path)
 
 
+def infer_platform(input_path: Path, metadata: dict) -> str:
+    raw = str(metadata.get("sourcePlatform") or "").strip().lower()
+    if raw:
+        return raw
+    if re.search(r"\[bv[0-9a-z]+\]", input_path.name, flags=re.IGNORECASE):
+        return "bilibili"
+    if "bilibili" in input_path.name.lower():
+        return "bilibili"
+    return ""
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Re-render edited OCR subtitles with the original music policy")
+    parser = argparse.ArgumentParser(description="Re-render edited OCR+Music subtitles with brand replacement")
     parser.add_argument("--input", required=True)
     parser.add_argument("--subtitle", required=True)
     parser.add_argument("--output", required=True)
@@ -92,16 +102,25 @@ def main() -> None:
     if not subtitle_path.is_file():
         raise FileNotFoundError(subtitle_path)
 
-    metadata = load_metadata(input_path, output_dir)
+    meta_path = metadata_path(input_path, output_dir)
+    metadata = load_metadata(meta_path)
     text_region = resolve_text_region(input_path, output_dir, metadata)
     music = resolve_music(input_path, metadata)
     duration = float(((metadata.get("ocr") or {}).get("duration") or 0)) if metadata else 0.0
     if duration <= 0:
         duration = probe_duration(input_path)
+    platform = infer_platform(input_path, metadata)
 
     with tempfile.TemporaryDirectory(prefix="videoget-ocr-rerender-") as temp:
         subbed = Path(temp) / "ocr-subbed.mp4"
-        ocr.render_ocr_subtitles(input_path, subtitle_path, subbed, text_region)
+        if meta_path.is_file():
+            try:
+                render_ocr_overlay.render(input_path, subtitle_path, meta_path, subbed, platform)
+            except Exception as error:
+                base.log(f"OCR+Music overlay re-render failed; falling back to legacy render: {error}")
+                ocr.render_ocr_subtitles(input_path, subtitle_path, subbed, text_region)
+        else:
+            ocr.render_ocr_subtitles(input_path, subtitle_path, subbed, text_region)
         ocr.mix_music(subbed, music, output_path, duration)
 
     if not output_path.is_file() or output_path.stat().st_size <= 0:
