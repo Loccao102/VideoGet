@@ -32,7 +32,7 @@ class OCRSegmentRegionTests(unittest.TestCase):
         ]
         metadata = {
             "segments": [
-                {"start": 0.0, "end": 2.0, "bbox": [0.10, 0.76, 0.70, 0.08], "placement": "bottom", "bboxConfidence": 1.0},
+                {"start": 0.0, "end": 2.0, "bbox": [0.42, 0.82, 0.16, 0.04], "placement": "bottom", "bboxConfidence": 1.0},
                 {"start": 3.0, "end": 5.0, "bbox": [0.18, 0.20, 0.50, 0.10], "placement": "upper", "bboxConfidence": 0.67},
             ]
         }
@@ -42,6 +42,12 @@ class OCRSegmentRegionTests(unittest.TestCase):
         self.assertFalse(entries[1]["bottom"])
         self.assertNotEqual(entries[0]["region"], entries[1]["region"])
         self.assertTrue(entries[0]["bboxMatched"])
+        # The lower display box expands for longer Vietnamese text but remains
+        # centered on the original OCR source region.
+        self.assertGreaterEqual(entries[0]["region"][2], 0.30)
+        self.assertEqual(entries[0]["sourceRegion"][0:2], overlay.normalize_region([0.42, 0.82, 0.16, 0.04])[0:2])
+        # Upper text must blur and render on the exact OCR region, not a large bottom box.
+        self.assertEqual(entries[1]["region"], entries[1]["sourceRegion"])
 
     def test_nearby_retimed_entry_can_reuse_bbox(self) -> None:
         entries = [{"start": 2.1, "end": 2.8, "text": "edited"}]
@@ -55,8 +61,16 @@ class OCRSegmentRegionTests(unittest.TestCase):
         entries = [{"start": 0.0, "end": 1.0, "text": "legacy"}]
         matched = overlay.attach_regions(entries, {"segments": []}, fallback)
         self.assertEqual(matched, 0)
-        self.assertEqual(entries[0]["region"], fallback)
+        self.assertEqual(entries[0]["sourceRegion"], fallback)
         self.assertFalse(entries[0]["bboxMatched"])
+
+    def test_bilibili_default_cleanup_targets_top_right(self) -> None:
+        x, y, w, h = [float(value) for value in overlay.DEFAULT_BILIBILI_REGIONS.split(",")]
+        self.assertGreaterEqual(x, 0.65)
+        self.assertLess(y, 0.05)
+        self.assertGreater(w, 0.15)
+        self.assertLessEqual(x + w, 1.0)
+        self.assertLess(h, 0.12)
 
 
 if __name__ == "__main__":
