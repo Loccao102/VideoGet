@@ -178,7 +178,7 @@ func (p *Processor) RenderSubtitles(ctx context.Context, input, subtitle, output
 
 // RenderOCROverlaySubtitles reuses the OCR footprint stored in metadata and only
 // changes presentation. It never runs OCR/translation/Whisper/TTS again.
-func (p *Processor) RenderOCROverlaySubtitles(ctx context.Context, input, subtitle, metadata, output, platform string) error {
+func (p *Processor) RenderOCROverlaySubtitles(ctx context.Context, input, subtitle, metadata, output, platform, style string) error {
 	if strings.TrimSpace(input) == "" || strings.TrimSpace(subtitle) == "" || strings.TrimSpace(metadata) == "" || strings.TrimSpace(output) == "" {
 		return fmt.Errorf("input, subtitle, OCR metadata and output paths are required")
 	}
@@ -218,6 +218,7 @@ func (p *Processor) RenderOCROverlaySubtitles(ctx context.Context, input, subtit
 		"--metadata", metadata,
 		"--output", output,
 		"--platform", strings.TrimSpace(platform),
+		"--style", strings.TrimSpace(style),
 	)
 	cmd.Env = os.Environ()
 	var stderr bytes.Buffer

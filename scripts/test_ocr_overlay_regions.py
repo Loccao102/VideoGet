@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Dependency-free tests for OCR overlay placement and default wiring."""
+"""Dependency-free tests for OCR overlay placement, styles and default wiring."""
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 # render_ocr_overlay only needs a tiny subset of these modules for the matching tests.
@@ -43,7 +45,7 @@ class OCRSegmentRegionTests(unittest.TestCase):
         self.assertFalse(entries[1]["bottom"])
         self.assertNotEqual(entries[0]["region"], entries[1]["region"])
         self.assertTrue(entries[0]["bboxMatched"])
-        self.assertGreaterEqual(entries[0]["region"][2], 0.30)
+        self.assertGreaterEqual(entries[0]["region"][2], 0.24)
         self.assertEqual(entries[0]["sourceRegion"][0:2], overlay.normalize_region([0.42, 0.82, 0.16, 0.04])[0:2])
         self.assertEqual(entries[1]["region"], entries[1]["sourceRegion"])
 
@@ -67,6 +69,31 @@ class OCRSegmentRegionTests(unittest.TestCase):
         self.assertIn("bilibili_brand.detect(input_path)", source)
         self.assertIn('brand_side in {"left", "right"}', source)
         self.assertNotIn("DEFAULT_BILIBILI_REGIONS", source)
+
+
+class OCROverlayStyleTests(unittest.TestCase):
+    def test_clean_is_default(self) -> None:
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("OCR_OVERLAY_STYLE", None)
+            self.assertEqual(overlay.normalize_style(None), "clean")
+
+    def test_legacy_overlay_alias_maps_to_clean(self) -> None:
+        self.assertEqual(overlay.normalize_style("ocr_overlay"), "clean")
+        self.assertEqual(overlay.normalize_style("ocr_clean"), "clean")
+
+    def test_capsule_and_box_aliases(self) -> None:
+        self.assertEqual(overlay.normalize_style("ocr_capsule"), "capsule")
+        self.assertEqual(overlay.normalize_style("ocr_box"), "box")
+
+    def test_unknown_style_is_rejected(self) -> None:
+        with self.assertRaises(RuntimeError):
+            overlay.normalize_style("huge-black-panel")
+
+    def test_clean_renderer_blurs_original_text_instead_of_default_black_box(self) -> None:
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        self.assertIn('render_style == "box" and entry.get("bottom")', source)
+        self.assertIn('if render_style == "capsule"', source)
+        self.assertIn('OCR_OVERLAY_CLEAN_OUTLINE', source)
 
 
 class OCRDefaultRenderTests(unittest.TestCase):

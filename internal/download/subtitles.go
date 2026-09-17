@@ -16,7 +16,10 @@ var srtTimingPattern = regexp.MustCompile(`(?m)^\s*\d{2}:\d{2}:\d{2}[,.]\d{3}\s+
 
 const (
 	SubtitleRenderStandard   = "standard"
-	SubtitleRenderOCROverlay = "ocr_overlay"
+	SubtitleRenderOCROverlay = "ocr_overlay" // backwards-compatible alias for clean
+	SubtitleRenderOCRClean   = "ocr_clean"
+	SubtitleRenderOCRCapsule = "ocr_capsule"
+	SubtitleRenderOCRBox     = "ocr_box"
 )
 
 func (m *Manager) Subtitle(id string) (string, string, int, error) {
@@ -115,13 +118,27 @@ func (m *Manager) RerenderSubtitles(id string) (Job, error) {
 	return m.RerenderSubtitlesWithStyle(id, SubtitleRenderStandard)
 }
 
+func normalizeOCRRenderStyle(style string) (string, bool) {
+	switch style {
+	case SubtitleRenderOCROverlay, SubtitleRenderOCRClean:
+		return "clean", true
+	case SubtitleRenderOCRCapsule:
+		return "capsule", true
+	case SubtitleRenderOCRBox:
+		return "box", true
+	default:
+		return "", false
+	}
+}
+
 func (m *Manager) RerenderSubtitlesWithStyle(id, style string) (Job, error) {
 	id = strings.TrimSpace(id)
 	style = strings.ToLower(strings.TrimSpace(style))
 	if style == "" {
 		style = SubtitleRenderStandard
 	}
-	if style != SubtitleRenderStandard && style != SubtitleRenderOCROverlay {
+	overlayStyle, isOCRStyle := normalizeOCRRenderStyle(style)
+	if style != SubtitleRenderStandard && !isOCRStyle {
 		return Job{}, fmt.Errorf("unknown subtitle render style %q", style)
 	}
 
@@ -145,7 +162,7 @@ func (m *Manager) RerenderSubtitlesWithStyle(id, style string) (Job, error) {
 	if m.localizer == nil {
 		return Job{}, fmt.Errorf("subtitle renderer is unavailable")
 	}
-	if style == SubtitleRenderOCROverlay {
+	if isOCRStyle {
 		if job.ProcessingMode != ProcessingOCRSubtitles && job.ProcessingMode != ProcessingOCRMusic {
 			return Job{}, fmt.Errorf("OCR overlay render is only available for OCR jobs")
 		}
@@ -160,11 +177,11 @@ func (m *Manager) RerenderSubtitlesWithStyle(id, style string) (Job, error) {
 		current.UpdatedAt = time.Now().UTC()
 	})
 	updated, _ := m.Get(id)
-	go m.runSubtitleRender(id, style)
+	go m.runSubtitleRender(id, style, overlayStyle)
 	return updated, nil
 }
 
-func (m *Manager) runSubtitleRender(id, style string) {
+func (m *Manager) runSubtitleRender(id, style, overlayStyle string) {
 	job, ok := m.Get(id)
 	if !ok {
 		return
@@ -193,13 +210,13 @@ func (m *Manager) runSubtitleRender(id, style string) {
 	stem := strings.TrimSuffix(filepath.Base(job.SourceOutput), filepath.Ext(job.SourceOutput))
 	var output string
 
-	if style == SubtitleRenderOCROverlay {
+	if overlayStyle != "" {
 		metadata, metaErr := ocrMetadataPath(job)
 		if metaErr != nil {
 			m.fail(id, JobLocalizationFailed, metaErr)
 			return
 		}
-		output = filepath.Join(outputDir, fmt.Sprintf("%s.ocr-overlay-r%d.mp4", stem, revision))
+		output = filepath.Join(outputDir, fmt.Sprintf("%s.ocr-%s-r%d.mp4", stem, overlayStyle, revision))
 		err = m.localizer.RenderOCROverlaySubtitles(
 			ctx,
 			job.SourceOutput,
@@ -207,6 +224,7 @@ func (m *Manager) runSubtitleRender(id, style string) {
 			metadata,
 			output,
 			job.Video.Platform,
+			overlayStyle,
 		)
 	} else if job.ProcessingMode == ProcessingOCRMusic {
 		output = filepath.Join(outputDir, fmt.Sprintf("%s.ocr-music-r%d.mp4", stem, revision))
