@@ -40,6 +40,7 @@ jobs:
           scripts/test_ocr_decode_proxy.py
           scripts/rerender_ocr_music.py
           scripts/render_subtitles.py
+          scripts/render_ocr_overlay.py
           scripts/douyin_search_browser.py
           scripts/douyin_search_browser_v2.py
           scripts/douyin_video_browser.py
