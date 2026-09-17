@@ -48,5 +48,15 @@ jobs:
           scripts/douyin_search_browser.py
           scripts/douyin_search_browser_v2.py
           scripts/douyin_video_browser.py
+      - name: Validate inline web JavaScript
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          html = Path('web/index.html').read_text(encoding='utf-8')
+          start = html.index('<script>') + len('<script>')
+          end = html.rindex('</script>')
+          Path('/tmp/videoget-web.js').write_text(html[start:end], encoding='utf-8')
+          PY
+          node --check /tmp/videoget-web.js
       - name: Validate Dockerfile
         run: docker buildx build --check .
