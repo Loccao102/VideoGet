@@ -12,9 +12,10 @@ import (
 )
 
 const (
-	ModeSubtitles = "subtitles"
-	ModeDub       = "dub"
-	ModeOCRMusic  = "ocr_music"
+	ModeSubtitles    = "subtitles"
+	ModeDub          = "dub"
+	ModeOCRMusic     = "ocr_music"
+	ModeOCRSubtitles = "ocr_subtitles"
 )
 
 // ProcessMode keeps the persistent worker for full dubbing jobs and uses
@@ -37,6 +38,15 @@ func (p *Processor) ProcessMode(ctx context.Context, input, mode string) (Result
 			)
 		}
 		label = "subtitle localization"
+	case ModeOCRSubtitles:
+		script = strings.TrimSpace(os.Getenv("OCR_SUBTITLE_SCRIPT"))
+		if script == "" {
+			script = firstExisting(
+				"/app/scripts/localize_ocr_subtitles.py",
+				filepath.FromSlash("scripts/localize_ocr_subtitles.py"),
+			)
+		}
+		label = "OCR subtitle localization"
 	case ModeOCRMusic:
 		script = strings.TrimSpace(os.Getenv("OCR_MUSIC_SCRIPT"))
 		if script == "" {
