@@ -40,6 +40,7 @@ jobs:
           scripts/localize_worker_smart.py
           scripts/localize_subtitles.py
           scripts/localize_ocr_music.py
+          scripts/localize_ocr_music_branded.py
           scripts/localize_ocr_subtitles.py
           scripts/ocr_segment_regions.py
           scripts/bilibili_brand.py
