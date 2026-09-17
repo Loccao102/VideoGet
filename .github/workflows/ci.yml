@@ -35,6 +35,7 @@ jobs:
           scripts/localize_subtitles.py
           scripts/localize_ocr_music.py
           scripts/localize_ocr_subtitles.py
+          scripts/test_ocr_decode_proxy.py
           scripts/rerender_ocr_music.py
           scripts/render_subtitles.py
           scripts/douyin_search_browser.py
