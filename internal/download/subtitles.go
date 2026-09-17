@@ -14,6 +14,11 @@ import (
 
 var srtTimingPattern = regexp.MustCompile(`(?m)^\s*\d{2}:\d{2}:\d{2}[,.]\d{3}\s+-->\s+\d{2}:\d{2}:\d{2}[,.]\d{3}`)
 
+const (
+	SubtitleRenderStandard   = "standard"
+	SubtitleRenderOCROverlay = "ocr_overlay"
+)
+
 func (m *Manager) Subtitle(id string) (string, string, int, error) {
 	job, ok := m.Get(strings.TrimSpace(id))
 	if !ok {
@@ -74,8 +79,52 @@ func (m *Manager) SaveSubtitle(id, content string) (Job, error) {
 	return updated, nil
 }
 
-func (m *Manager) RerenderSubtitles(id string) (Job, error) {
+// ReprocessOCR reruns the OCR pipeline against the already downloaded source.
+// It intentionally keeps SourceOutput so no network download is repeated.
+func (m *Manager) ReprocessOCR(id string) (Job, error) {
 	id = strings.TrimSpace(id)
+	job, ok := m.Get(id)
+	if !ok {
+		return Job{}, fmt.Errorf("job not found")
+	}
+	if job.Status == JobQueued || job.Status == JobDownloading || job.Status == JobLocalizing || job.Status == JobRendering {
+		return Job{}, fmt.Errorf("job is currently running")
+	}
+	if job.ProcessingMode != ProcessingOCRSubtitles && job.ProcessingMode != ProcessingOCRMusic {
+		return Job{}, fmt.Errorf("OCR reprocess is only available for OCR jobs")
+	}
+	if !reusableMedia(job.SourceOutput) {
+		return Job{}, fmt.Errorf("downloaded source video is unavailable")
+	}
+
+	m.update(id, func(current *Job) {
+		current.Status = JobQueued
+		current.Error = ""
+		current.Output = current.SourceOutput
+		current.Localization = nil
+		current.SubtitleRevision = 0
+		current.Attempts++
+		current.UpdatedAt = time.Now().UTC()
+	})
+	updated, _ := m.Get(id)
+	go m.run(id)
+	return updated, nil
+}
+
+func (m *Manager) RerenderSubtitles(id string) (Job, error) {
+	return m.RerenderSubtitlesWithStyle(id, SubtitleRenderStandard)
+}
+
+func (m *Manager) RerenderSubtitlesWithStyle(id, style string) (Job, error) {
+	id = strings.TrimSpace(id)
+	style = strings.ToLower(strings.TrimSpace(style))
+	if style == "" {
+		style = SubtitleRenderStandard
+	}
+	if style != SubtitleRenderStandard && style != SubtitleRenderOCROverlay {
+		return Job{}, fmt.Errorf("unknown subtitle render style %q", style)
+	}
+
 	job, ok := m.Get(id)
 	if !ok {
 		return Job{}, fmt.Errorf("job not found")
@@ -96,6 +145,14 @@ func (m *Manager) RerenderSubtitles(id string) (Job, error) {
 	if m.localizer == nil {
 		return Job{}, fmt.Errorf("subtitle renderer is unavailable")
 	}
+	if style == SubtitleRenderOCROverlay {
+		if job.ProcessingMode != ProcessingOCRSubtitles && job.ProcessingMode != ProcessingOCRMusic {
+			return Job{}, fmt.Errorf("OCR overlay render is only available for OCR jobs")
+		}
+		if _, err := ocrMetadataPath(job); err != nil {
+			return Job{}, err
+		}
+	}
 
 	m.update(id, func(current *Job) {
 		current.Status = JobRendering
@@ -103,11 +160,11 @@ func (m *Manager) RerenderSubtitles(id string) (Job, error) {
 		current.UpdatedAt = time.Now().UTC()
 	})
 	updated, _ := m.Get(id)
-	go m.runSubtitleRender(id)
+	go m.runSubtitleRender(id, style)
 	return updated, nil
 }
 
-func (m *Manager) runSubtitleRender(id string) {
+func (m *Manager) runSubtitleRender(id, style string) {
 	job, ok := m.Get(id)
 	if !ok {
 		return
@@ -135,7 +192,23 @@ func (m *Manager) runSubtitleRender(id string) {
 	outputDir := filepath.Join(filepath.Dir(job.SourceOutput), "localized")
 	stem := strings.TrimSuffix(filepath.Base(job.SourceOutput), filepath.Ext(job.SourceOutput))
 	var output string
-	if job.ProcessingMode == ProcessingOCRMusic {
+
+	if style == SubtitleRenderOCROverlay {
+		metadata, metaErr := ocrMetadataPath(job)
+		if metaErr != nil {
+			m.fail(id, JobLocalizationFailed, metaErr)
+			return
+		}
+		output = filepath.Join(outputDir, fmt.Sprintf("%s.ocr-overlay-r%d.mp4", stem, revision))
+		err = m.localizer.RenderOCROverlaySubtitles(
+			ctx,
+			job.SourceOutput,
+			subtitle,
+			metadata,
+			output,
+			job.Video.Platform,
+		)
+	} else if job.ProcessingMode == ProcessingOCRMusic {
 		output = filepath.Join(outputDir, fmt.Sprintf("%s.ocr-music-r%d.mp4", stem, revision))
 		err = m.localizer.RenderOCRMusicSubtitles(ctx, job.SourceOutput, subtitle, output)
 	} else {
@@ -165,6 +238,25 @@ func editableSubtitlePath(job Job) (string, error) {
 		return "", fmt.Errorf("job has no Vietnamese subtitle yet")
 	}
 	return filepath.Clean(job.Localization.VietnameseSubtitle), nil
+}
+
+func ocrMetadataPath(job Job) (string, error) {
+	if strings.TrimSpace(job.SourceOutput) == "" {
+		return "", fmt.Errorf("OCR source video is unavailable")
+	}
+	outputDir := filepath.Join(filepath.Dir(job.SourceOutput), "localized")
+	stem := strings.TrimSuffix(filepath.Base(job.SourceOutput), filepath.Ext(job.SourceOutput))
+	candidates := []string{
+		filepath.Join(outputDir, stem+".ocr-subtitles.json"),
+		filepath.Join(outputDir, stem+".ocr-music.json"),
+	}
+	for _, path := range candidates {
+		info, err := os.Stat(path)
+		if err == nil && !info.IsDir() && info.Size() > 0 {
+			return path, nil
+		}
+	}
+	return "", fmt.Errorf("OCR metadata is unavailable; run OCR again first")
 }
 
 func ensurePathInsideJob(downloadDir, id, path string) error {

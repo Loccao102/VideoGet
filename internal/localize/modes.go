@@ -175,3 +175,65 @@ func (p *Processor) RenderSubtitles(ctx context.Context, input, subtitle, output
 	}
 	return nil
 }
+
+// RenderOCROverlaySubtitles reuses the OCR footprint stored in metadata and only
+// changes presentation. It never runs OCR/translation/Whisper/TTS again.
+func (p *Processor) RenderOCROverlaySubtitles(ctx context.Context, input, subtitle, metadata, output, platform string) error {
+	if strings.TrimSpace(input) == "" || strings.TrimSpace(subtitle) == "" || strings.TrimSpace(metadata) == "" || strings.TrimSpace(output) == "" {
+		return fmt.Errorf("input, subtitle, OCR metadata and output paths are required")
+	}
+	for _, path := range []string{input, subtitle, metadata} {
+		if _, err := os.Stat(path); err != nil {
+			return fmt.Errorf("required file %s is unavailable: %w", path, err)
+		}
+	}
+	python := p.python
+	if strings.TrimSpace(python) == "" {
+		python = "python3"
+	}
+	script := strings.TrimSpace(os.Getenv("OCR_OVERLAY_RENDER_SCRIPT"))
+	if script == "" {
+		script = firstExisting(
+			"/app/scripts/render_ocr_overlay.py",
+			filepath.FromSlash("scripts/render_ocr_overlay.py"),
+		)
+	}
+	if script == "" {
+		return fmt.Errorf("OCR overlay render script not found")
+	}
+
+	select {
+	case p.sem <- struct{}{}:
+		defer func() { <-p.sem }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	if err := os.MkdirAll(filepath.Dir(output), 0o755); err != nil {
+		return fmt.Errorf("create OCR overlay render directory: %w", err)
+	}
+	cmd := exec.CommandContext(ctx, python, script,
+		"--input", input,
+		"--subtitle", subtitle,
+		"--metadata", metadata,
+		"--output", output,
+		"--platform", strings.TrimSpace(platform),
+	)
+	cmd.Env = os.Environ()
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		message := strings.TrimSpace(stderr.String())
+		if message == "" {
+			message = err.Error()
+		}
+		return fmt.Errorf("OCR overlay render failed: %s", message)
+	}
+	if info, err := os.Stat(output); err != nil || info.IsDir() || info.Size() <= 0 {
+		if err == nil {
+			err = fmt.Errorf("empty output")
+		}
+		return fmt.Errorf("OCR overlay render produced no usable video: %w", err)
+	}
+	return nil
+}
