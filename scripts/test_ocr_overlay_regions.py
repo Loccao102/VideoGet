@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dependency-free tests for timestamp -> per-segment OCR bbox matching."""
+"""Dependency-free tests for OCR overlay placement and default wiring."""
 from __future__ import annotations
 
 import importlib.util
@@ -18,6 +18,7 @@ sys.modules.setdefault("localize", localize_stub)
 sys.modules.setdefault("smart_render", smart_stub)
 
 MODULE_PATH = Path(__file__).with_name("render_ocr_overlay.py")
+LOCALIZER_PATH = Path(__file__).with_name("localize_ocr_subtitles.py")
 spec = importlib.util.spec_from_file_location("render_ocr_overlay_tested", MODULE_PATH)
 overlay = importlib.util.module_from_spec(spec)
 assert spec and spec.loader
@@ -42,11 +43,8 @@ class OCRSegmentRegionTests(unittest.TestCase):
         self.assertFalse(entries[1]["bottom"])
         self.assertNotEqual(entries[0]["region"], entries[1]["region"])
         self.assertTrue(entries[0]["bboxMatched"])
-        # The lower display box expands for longer Vietnamese text but remains
-        # centered on the original OCR source region.
         self.assertGreaterEqual(entries[0]["region"][2], 0.30)
         self.assertEqual(entries[0]["sourceRegion"][0:2], overlay.normalize_region([0.42, 0.82, 0.16, 0.04])[0:2])
-        # Upper text must blur and render on the exact OCR region, not a large bottom box.
         self.assertEqual(entries[1]["region"], entries[1]["sourceRegion"])
 
     def test_nearby_retimed_entry_can_reuse_bbox(self) -> None:
@@ -71,6 +69,20 @@ class OCRSegmentRegionTests(unittest.TestCase):
         self.assertGreater(w, 0.15)
         self.assertLessEqual(x + w, 1.0)
         self.assertLess(h, 0.12)
+
+
+class OCRDefaultRenderTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.source = LOCALIZER_PATH.read_text(encoding="utf-8")
+
+    def test_initial_render_defaults_to_overlay(self) -> None:
+        self.assertIn('OCR_SUBTITLE_INITIAL_RENDER_STYLE", "ocr_overlay"', self.source)
+        self.assertIn("render_ocr_overlay.render(input_path, vi_srt, metadata_path, output_video, platform)", self.source)
+
+    def test_bilibili_can_be_inferred_from_bv_filename(self) -> None:
+        self.assertIn('return "bilibili"', self.source)
+        self.assertIn("VIDEOGET_SOURCE_PLATFORM", self.source)
 
 
 if __name__ == "__main__":
