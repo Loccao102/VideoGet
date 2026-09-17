@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -27,6 +28,7 @@ import localize as base
 import localize_fast as fast  # noqa: F401 - installs optimized translation overrides on base
 import localize_ocr_music as ocr
 import ocr_segment_regions
+import render_ocr_overlay
 
 
 def video_codec(path: Path) -> str:
@@ -124,6 +126,20 @@ def prepare_ocr_input(input_path: Path, output_dir: Path) -> tuple[Path, bool, s
     return proxy, True, codec
 
 
+def infer_platform(input_path: Path) -> str:
+    explicit = os.getenv("VIDEOGET_SOURCE_PLATFORM", "").strip().lower()
+    if explicit:
+        return explicit
+    # VideoGet's Bilibili downloader keeps the BV id in the filename, e.g.
+    # "title [BV1PkDhBXEVM].mp4". This gives the one-shot OCR process enough
+    # information to apply Bilibili watermark cleanup without changing old callers.
+    if re.search(r"\[bv[0-9a-z]+\]", input_path.name, flags=re.IGNORECASE):
+        return "bilibili"
+    if "bilibili" in input_path.name.lower():
+        return "bilibili"
+    return ""
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="OCR source captions, translate to Vietnamese, keep original audio")
     parser.add_argument("--input", required=True)
@@ -147,6 +163,7 @@ def main() -> None:
         "music": 0.0,
         "decodeProxy": 0.0,
         "bbox": 0.0,
+        "render": 0.0,
     }
     started = time.perf_counter()
 
@@ -194,12 +211,10 @@ def main() -> None:
 
     fallback_region = tuple(float(value) for value in video_info["region"])
     text_region = ocr.aggregate_text_region(boxes, fallback_region)
-    render_started = time.perf_counter()
-    # Final render deliberately uses input_path, not the compatibility proxy, so the
-    # source audio is preserved and the proxy never becomes the user's final media.
-    ocr.render_ocr_subtitles(input_path, vi_srt, output_video, text_region)
-    timings["render"] = round(time.perf_counter() - render_started, 3)
-    timings["total"] = round(time.perf_counter() - started, 3)
+    platform = infer_platform(input_path)
+    initial_render_style = os.getenv("OCR_SUBTITLE_INITIAL_RENDER_STYLE", "ocr_overlay").strip().lower() or "ocr_overlay"
+    if initial_render_style not in {"ocr_overlay", "standard"}:
+        raise RuntimeError("OCR_SUBTITLE_INITIAL_RENDER_STYLE must be ocr_overlay or standard")
 
     metadata = {
         "input": str(input_path),
@@ -211,7 +226,9 @@ def main() -> None:
         "outputVideo": str(output_video),
         "preserveOriginalAudio": True,
         "sourceVideoCodec": source_codec,
+        "sourcePlatform": platform,
         "ocrDecodeProxyUsed": proxy_used,
+        "initialRenderStyle": initial_render_style,
         "ocr": {
             **video_info,
             "modelSize": os.getenv("OCR_MODEL_SIZE", "small"),
@@ -221,7 +238,21 @@ def main() -> None:
         },
         "timings": timings,
     }
+    # Overlay rendering consumes this metadata, so persist it before the render pass.
     metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    render_started = time.perf_counter()
+    # Final render deliberately uses input_path, not the compatibility proxy, so the
+    # source audio is preserved and the proxy never becomes the user's final media.
+    if initial_render_style == "ocr_overlay":
+        render_ocr_overlay.render(input_path, vi_srt, metadata_path, output_video, platform)
+    else:
+        ocr.render_ocr_subtitles(input_path, vi_srt, output_video, text_region)
+    timings["render"] = round(time.perf_counter() - render_started, 3)
+    timings["total"] = round(time.perf_counter() - started, 3)
+    metadata["timings"] = timings
+    metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+
     print(json.dumps({
         "originalSubtitle": str(original_srt),
         "vietnameseSubtitle": str(vi_srt),
