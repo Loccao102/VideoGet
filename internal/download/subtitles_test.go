@@ -34,3 +34,21 @@ func TestNormalizeSRT(t *testing.T) {
 		t.Fatalf("normalizeSRT mismatch:\nwant=%q\ngot =%q", want, got)
 	}
 }
+
+func TestNormalizeOCRRenderStyle(t *testing.T) {
+	tests := map[string]string{
+		SubtitleRenderOCROverlay: "clean",
+		SubtitleRenderOCRClean:   "clean",
+		SubtitleRenderOCRCapsule: "capsule",
+		SubtitleRenderOCRBox:     "box",
+	}
+	for input, want := range tests {
+		got, ok := normalizeOCRRenderStyle(input)
+		if !ok || got != want {
+			t.Fatalf("style %q => %q, %v; want %q", input, got, ok, want)
+		}
+	}
+	if _, ok := normalizeOCRRenderStyle("giant_panel"); ok {
+		t.Fatal("unknown OCR render style should be rejected")
+	}
+}
