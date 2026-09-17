@@ -1,22 +1,38 @@
-# OCR + Music mode
+# OCR processing modes
 
-`ocr_music` is a lightweight localization path for short videos whose useful content is burned into the video as text and does not need Vietnamese voice-over.
+VideoGet has two OCR-first localization modes for short videos whose useful content is burned into the frames as text. Both run locally with RapidOCR / PP-OCRv6 and do **not** load Whisper or TTS.
 
-## Flow
+## `ocr_subtitles`
+
+Use this when you want Vietnamese subtitles from on-screen text but want to keep the source video/audio.
 
 ```text
 Downloaded video
   -> sample 2-3 frames/sec
   -> RapidOCR / PP-OCRv6 on likely caption region
   -> merge repeated OCR observations into timed segments
-  -> translate segments with the configured VideoGet translation provider
+  -> translate with the configured VideoGet translation provider
   -> derive the source-caption footprint from OCR boxes
   -> blur that footprint only while captions are active
-  -> burn Vietnamese subtitles
-  -> replace/duck original audio with local background music
+  -> burn Vietnamese subtitles into the source video
+  -> keep original audio
 ```
 
-This path does **not** load Whisper and does **not** run TTS.
+The web UI exposes this as a dedicated **OCR → Sub Việt** button on every video card and as the bulk mode `OCR chữ → Sub Việt + giữ video/audio gốc`.
+
+Editing the generated SRT and pressing **Lưu + render lại** renders from the original downloaded source again. OCR and translation are not rerun.
+
+## `ocr_music`
+
+Use this when the same OCR subtitle flow should finish with background music instead of keeping the source audio unchanged.
+
+```text
+Downloaded video
+  -> OCR + translate + Vietnamese subtitle
+  -> clean source caption footprint
+  -> burn Vietnamese subtitle
+  -> replace/duck/mix source audio with local background music
+```
 
 ## Music
 
@@ -28,9 +44,11 @@ You can also force one track:
 OCR_MUSIC_FILE=/app/assets/music/track.mp3
 ```
 
-By default, a missing music track fails the `ocr_music` job with a clear error (`OCR_MUSIC_REQUIRED=true`) instead of silently producing a video without music.
+By default, a missing music track fails the `ocr_music` job with a clear error (`OCR_MUSIC_REQUIRED=true`) instead of silently producing a video without music. This setting does not affect `ocr_subtitles`.
 
 ## Main settings
+
+Both OCR modes share the same detection/translation settings:
 
 ```env
 OCR_MODEL_SIZE=small
@@ -41,7 +59,11 @@ OCR_TEXT_SIMILARITY=0.78
 OCR_IGNORE_PERSISTENT_SEC=12
 OCR_TRANSLATE=true
 OCR_REMOVE_SOURCE_TEXT=true
+```
 
+Music-only settings:
+
+```env
 OCR_MUSIC_DIR=/app/assets/music
 OCR_MUSIC_REQUIRED=true
 OCR_MUSIC_VOLUME=0.18
