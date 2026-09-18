@@ -175,6 +175,52 @@ def main() -> None:
     try:
         ocr_started = time.perf_counter()
         segments, boxes, video_info = ocr.extract_segments(ocr_input, output_dir)
+
+        # Auto-layout can occasionally miss the real burned-caption band, especially
+        # on AV1 sources where OCR works from a temporary H.264 proxy. If the first
+        # automatic pass produces no timed segments, make one conservative recovery
+        # pass with a wider ROI and slightly lower OCR confidence. Manual ROI users
+        # keep full control and are never silently overridden.
+        original_region = os.getenv("OCR_SUBTITLE_REGION", "auto").strip()
+        if (
+            not segments
+            and ocr.env_bool("OCR_RETRY_ON_EMPTY", True)
+            and original_region.lower() in {"", "auto"}
+        ):
+            retry_region = os.getenv(
+                "OCR_RETRY_REGION", "0.02,0.20,0.96,0.78"
+            ).strip() or "0.02,0.20,0.96,0.78"
+            current_confidence = ocr.env_float("OCR_MIN_CONFIDENCE", 0.65, 0.0)
+            retry_confidence = min(
+                current_confidence,
+                ocr.env_float(
+                    "OCR_RETRY_MIN_CONFIDENCE",
+                    max(0.50, current_confidence - 0.08),
+                    0.0,
+                ),
+            )
+            previous_region_env = os.environ.get("OCR_SUBTITLE_REGION")
+            previous_confidence_env = os.environ.get("OCR_MIN_CONFIDENCE")
+            base.log(
+                "OCR first pass found 0 timed segments; retrying once with "
+                f"region={retry_region}, minConfidence={retry_confidence:.2f}"
+            )
+            try:
+                os.environ["OCR_SUBTITLE_REGION"] = retry_region
+                os.environ["OCR_MIN_CONFIDENCE"] = f"{retry_confidence:.4f}"
+                segments, boxes, video_info = ocr.extract_segments(
+                    ocr_input, output_dir
+                )
+            finally:
+                if previous_region_env is None:
+                    os.environ.pop("OCR_SUBTITLE_REGION", None)
+                else:
+                    os.environ["OCR_SUBTITLE_REGION"] = previous_region_env
+                if previous_confidence_env is None:
+                    os.environ.pop("OCR_MIN_CONFIDENCE", None)
+                else:
+                    os.environ["OCR_MIN_CONFIDENCE"] = previous_confidence_env
+
         timings["ocr"] = round(time.perf_counter() - ocr_started, 3)
 
         if segments:

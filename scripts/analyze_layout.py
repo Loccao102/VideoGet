@@ -101,8 +101,20 @@ def edge_maps(frames: list[np.ndarray]) -> list[np.ndarray]:
 
 
 def detect_faces(frames: list[np.ndarray], width: int, height: int) -> list[Region]:
-    cascade_path = str(Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml")
-    cascade = cv2.CascadeClassifier(cascade_path)
+    # Face protection is only a best-effort layout hint. Some minimal/headless
+    # OpenCV builds expose VideoCapture/Canny but omit the objdetect cascade API.
+    # Never let that optional feature abort subtitle/watermark analysis.
+    cascade_factory = getattr(cv2, "CascadeClassifier", None)
+    data = getattr(cv2, "data", None)
+    haarcascades = getattr(data, "haarcascades", "") if data is not None else ""
+    if cascade_factory is None or not haarcascades:
+        return []
+
+    cascade_path = str(Path(haarcascades) / "haarcascade_frontalface_default.xml")
+    try:
+        cascade = cascade_factory(cascade_path)
+    except Exception:
+        return []
     if cascade.empty():
         return []
     detections: list[Region] = []
