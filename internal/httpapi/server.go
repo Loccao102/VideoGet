@@ -96,6 +96,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Keyword = strings.TrimSpace(req.Keyword)
+	req.SearchMode = normalizeSearchMode(req.SearchMode)
 	if req.Keyword == "" {
 		writeError(w, http.StatusBadRequest, "keyword is required")
 		return
@@ -117,7 +118,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 
 	keywords := []string{req.Keyword}
 	var expansionErr error
-	if req.Expand {
+	if req.SearchMode == searchModeKeyword && req.Expand {
 		keywords, expansionErr = discovery.ExpandContext(r.Context(), req.Keyword)
 	}
 	if len(keywords) == 0 {
@@ -126,6 +127,17 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 	perQueryLimit := (req.Limit + len(keywords) - 1) / len(keywords)
 	if perQueryLimit < 10 {
 		perQueryLimit = 10
+	}
+	if req.SearchMode == searchModeChannel {
+		// Provider search APIs are keyword-oriented rather than creator-native.
+		// Fetch a wider candidate set, then enforce exact Author matching below.
+		perQueryLimit = req.Limit * 4
+		if perQueryLimit < 30 {
+			perQueryLimit = 30
+		}
+		if perQueryLimit > 100 {
+			perQueryLimit = 100
+		}
 	}
 
 	type providerResult struct {
@@ -184,8 +196,9 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	response := model.SearchResponse{
-		Keyword:  req.Keyword,
-		Keywords: keywords,
+		Keyword:    req.Keyword,
+		SearchMode: req.SearchMode,
+		Keywords:   keywords,
 		Results:  []model.Video{},
 		Errors:   map[string]string{},
 	}
@@ -217,6 +230,9 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response.Results = ranking.Deduplicate(response.Results)
+	if req.SearchMode == searchModeChannel {
+		response.Results = filterVideosByChannel(response.Results, req.Keyword)
+	}
 	response.Results = ranking.Rank(response.Results, req.Keyword, req.Sort, req.Filters, time.Now().UTC())
 	if len(response.Results) > req.Limit {
 		response.Results = response.Results[:req.Limit]
