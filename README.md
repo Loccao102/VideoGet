@@ -27,6 +27,9 @@ chủ đề tiếng Việt
 - Auto queue Top 3/5/10 hoặc chọn thủ công.
 
 ### Download
+- Kết quả **Search** được đối chiếu với lịch sử job trong SQLite theo `platform + video id`, fallback URL. Mỗi card hiển thị rõ `Chưa tải`, `Đang tải / xử lý`, `Đã tải` hoặc `Lần trước bị lỗi`.
+- Nếu source đã tải nhưng localization lỗi, card vẫn được đánh dấu **Đã tải · xử lý lỗi** để không nhầm với video chưa từng tải.
+- Nút **Top N** tự bỏ qua video đã tải/đang xử lý; video đã tải vẫn có thể bấm thủ công để tạo một job mới khi muốn xử lý lại bằng mode/tỉ lệ khác.
 - Mỗi job có thư mục riêng.
 - **Douyin không dùng `douyin-cli` và cũng không dùng `yt-dlp` trong nhánh tải.**
 - Douyin resolve `aweme_id`, request `https://www.iesdouyin.com/share/video/{id}/` bằng iPhone User-Agent, parse `window._ROUTER_DATA -> videoInfoRes.item_list[0]`, rồi tải trực tiếp `video.bit_rate` / `video.play_addr`.
