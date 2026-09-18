@@ -129,6 +129,7 @@ def prepare_ocr_input(input_path: Path, output_dir: Path) -> tuple[Path, bool, s
 
     if not proxy.exists() or proxy.stat().st_size <= 0:
         raise RuntimeError("ffmpeg created no usable OCR decode proxy")
+    base.log(f"OCR proxy ready: {proxy.stat().st_size / (1024 * 1024):.1f} MiB")
     if not opencv_can_decode(proxy):
         raise RuntimeError(
             "source video cannot be decoded by OpenCV even after H.264 compatibility transcoding; "
@@ -263,7 +264,10 @@ def main() -> None:
     finally:
         if proxy_used and ocr_input != input_path and not ocr.env_bool("OCR_KEEP_DECODE_PROXY", False):
             try:
+                proxy_size = ocr_input.stat().st_size if ocr_input.exists() else 0
                 ocr_input.unlink(missing_ok=True)
+                if proxy_size > 0:
+                    base.log(f"OCR proxy removed: {proxy_size / (1024 * 1024):.1f} MiB temporary file")
             except OSError as error:
                 base.log(f"Could not remove OCR decode proxy: {error}")
 
