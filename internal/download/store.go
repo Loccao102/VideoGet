@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Loccao102/VideoGet/internal/localize"
@@ -59,6 +60,8 @@ func (s *jobStore) init() error {
 			attempts INTEGER NOT NULL DEFAULT 1,
 			processing_mode TEXT NOT NULL DEFAULT 'dub',
 			output_aspect TEXT NOT NULL DEFAULT 'original',
+			rendered_output TEXT NOT NULL DEFAULT '',
+			aspect_outputs_json TEXT NOT NULL DEFAULT '{}',
 			subtitle_revision INTEGER NOT NULL DEFAULT 0,
 			created_at INTEGER NOT NULL,
 			updated_at INTEGER NOT NULL
@@ -74,6 +77,12 @@ func (s *jobStore) init() error {
 		return err
 	}
 	if err := s.ensureColumn("output_aspect", "TEXT NOT NULL DEFAULT 'original'"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("rendered_output", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("aspect_outputs_json", "TEXT NOT NULL DEFAULT '{}'"); err != nil {
 		return err
 	}
 	if err := s.ensureColumn("subtitle_revision", "INTEGER NOT NULL DEFAULT 0"); err != nil {
@@ -132,12 +141,17 @@ func (s *jobStore) Upsert(job Job) error {
 		}
 		localizationJSON = string(encoded)
 	}
+	aspectOutputsJSON, err := json.Marshal(job.AspectOutputs)
+	if err != nil {
+		return fmt.Errorf("encode aspect outputs: %w", err)
+	}
 
 	_, err = s.db.Exec(`
 		INSERT INTO jobs (
 			id, status, video_json, source_output, output, localization_json,
-			error, attempts, processing_mode, output_aspect, subtitle_revision, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			error, attempts, processing_mode, output_aspect, rendered_output, aspect_outputs_json,
+			subtitle_revision, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			status = excluded.status,
 			video_json = excluded.video_json,
@@ -148,6 +162,8 @@ func (s *jobStore) Upsert(job Job) error {
 			attempts = excluded.attempts,
 			processing_mode = excluded.processing_mode,
 			output_aspect = excluded.output_aspect,
+			rendered_output = excluded.rendered_output,
+			aspect_outputs_json = excluded.aspect_outputs_json,
 			subtitle_revision = excluded.subtitle_revision,
 			created_at = excluded.created_at,
 			updated_at = excluded.updated_at
@@ -162,6 +178,8 @@ func (s *jobStore) Upsert(job Job) error {
 		job.Attempts,
 		normalizeProcessingMode(job.ProcessingMode),
 		normalizeOutputAspect(job.OutputAspect),
+		job.RenderedOutput,
+		string(aspectOutputsJSON),
 		job.SubtitleRevision,
 		job.CreatedAt.UnixNano(),
 		job.UpdatedAt.UnixNano(),
@@ -175,7 +193,8 @@ func (s *jobStore) Upsert(job Job) error {
 func (s *jobStore) LoadAll() ([]Job, error) {
 	rows, err := s.db.Query(`
 		SELECT id, status, video_json, source_output, output, localization_json,
-		       error, attempts, processing_mode, output_aspect, subtitle_revision, created_at, updated_at
+		       error, attempts, processing_mode, output_aspect, rendered_output, aspect_outputs_json,
+		       subtitle_revision, created_at, updated_at
 		FROM jobs
 		ORDER BY created_at DESC
 	`)
@@ -191,6 +210,7 @@ func (s *jobStore) LoadAll() ([]Job, error) {
 			status           string
 			videoJSON        string
 			localizationJSON sql.NullString
+			aspectOutputsJSON string
 			createdAt        int64
 			updatedAt        int64
 		)
@@ -205,6 +225,8 @@ func (s *jobStore) LoadAll() ([]Job, error) {
 			&job.Attempts,
 			&job.ProcessingMode,
 			&job.OutputAspect,
+			&job.RenderedOutput,
+			&aspectOutputsJSON,
 			&job.SubtitleRevision,
 			&createdAt,
 			&updatedAt,
@@ -214,6 +236,11 @@ func (s *jobStore) LoadAll() ([]Job, error) {
 		job.Status = JobStatus(status)
 		job.ProcessingMode = normalizeProcessingMode(job.ProcessingMode)
 		job.OutputAspect = normalizeOutputAspect(job.OutputAspect)
+		if strings.TrimSpace(aspectOutputsJSON) != "" {
+			if err := json.Unmarshal([]byte(aspectOutputsJSON), &job.AspectOutputs); err != nil {
+				return nil, fmt.Errorf("decode aspect outputs for job %s: %w", job.ID, err)
+			}
+		}
 		job.CreatedAt = time.Unix(0, createdAt).UTC()
 		job.UpdatedAt = time.Unix(0, updatedAt).UTC()
 		if err := json.Unmarshal([]byte(videoJSON), &job.Video); err != nil {
