@@ -103,6 +103,8 @@ func (m *Manager) ReprocessOCR(id string) (Job, error) {
 	m.update(id, func(current *Job) {
 		current.Status = JobQueued
 		current.Error = ""
+		current.RenderedOutput = ""
+		current.AspectOutputs = nil
 		current.Output = current.SourceOutput
 		current.Localization = nil
 		current.SubtitleRevision = 0
