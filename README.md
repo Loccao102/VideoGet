@@ -109,6 +109,18 @@ Khi VideoGet khởi động lại:
 - job `failed` / `localization_failed` không tự retry vô hạn; UI có nút **Thử lại**;
 - retry localization dùng stage cache để tránh chạy lại công việc đã hoàn thành.
 
+## Preset phần cứng
+
+VideoGet có 3 cấu hình phần cứng:
+
+| Tier | File | CPU logical threads | RAM | OCR | Ollama |
+|---|---|---:|---:|---|---|
+| Yếu | `.env.low.example` | 4-8 | 8-16 GB | tiny / 2 FPS | qwen3:1.7b |
+| Vừa / mặc định | `.env.medium.example` hoặc `.env.example` | 8-16 | 16-32 GB | small / 3 FPS | qwen3:4b |
+| Cao / workstation | `.env.high.example` | 20-32+ | 32-64+ GB | medium / 4 FPS | qwen3:8b |
+
+Chi tiết cách chọn máy, ý nghĩa `LOCALIZE_CONCURRENCY`, `OCR_FPS`, `OCR_MODEL_SIZE`, Ollama, Whisper, AV1 proxy và render nằm tại [docs/env-presets.md](docs/env-presets.md).
+
 ## Chạy bằng Docker
 
 Lần đầu:
