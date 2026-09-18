@@ -43,10 +43,12 @@ type Job struct {
 	Status           JobStatus        `json:"status"`
 	Video            model.Video      `json:"video"`
 	ProcessingMode   string           `json:"processingMode"`
-	OutputAspect     string           `json:"outputAspect,omitempty"`
-	SubtitleRevision int              `json:"subtitleRevision,omitempty"`
-	SourceOutput     string           `json:"sourceOutput,omitempty"`
-	Output           string           `json:"output,omitempty"`
+	OutputAspect     string            `json:"outputAspect,omitempty"`
+	AspectOutputs    map[string]string `json:"aspectOutputs,omitempty"`
+	RenderedOutput   string            `json:"renderedOutput,omitempty"`
+	SubtitleRevision int               `json:"subtitleRevision,omitempty"`
+	SourceOutput     string            `json:"sourceOutput,omitempty"`
+	Output           string            `json:"output,omitempty"`
 	Localization     *localize.Result `json:"localization,omitempty"`
 	Error            string           `json:"error,omitempty"`
 	Attempts         int              `json:"attempts"`
@@ -345,8 +347,13 @@ func (m *Manager) run(id string) {
 		}
 		m.update(id, func(job *Job) {
 			job.Status = JobDone
+			job.RenderedOutput = sourceOutput
 			job.Output = finalOutput
 			job.Error = ""
+			job.AspectOutputs = map[string]string{OutputAspectOriginal: sourceOutput}
+			if job.OutputAspect != OutputAspectOriginal {
+				job.AspectOutputs[job.OutputAspect] = finalOutput
+			}
 			job.UpdatedAt = time.Now().UTC()
 		})
 		return
@@ -379,7 +386,8 @@ func (m *Manager) run(id string) {
 		return
 	}
 
-	finalOutput := result.OutputVideo
+	renderedOutput := result.OutputVideo
+	finalOutput := renderedOutput
 	if job.OutputAspect != OutputAspectOriginal {
 		m.update(id, func(current *Job) {
 			current.Status = JobRendering
@@ -398,8 +406,13 @@ func (m *Manager) run(id string) {
 	m.update(id, func(job *Job) {
 		job.Status = JobDone
 		job.Localization = &result
+		job.RenderedOutput = renderedOutput
 		job.Error = ""
 		job.Output = finalOutput
+		job.AspectOutputs = map[string]string{OutputAspectOriginal: renderedOutput}
+		if job.OutputAspect != OutputAspectOriginal {
+			job.AspectOutputs[job.OutputAspect] = finalOutput
+		}
 		job.UpdatedAt = time.Now().UTC()
 	})
 }
