@@ -46,7 +46,7 @@ class OCRSegmentRegionTests(unittest.TestCase):
         self.assertNotEqual(entries[0]["region"], entries[1]["region"])
         self.assertTrue(entries[0]["bboxMatched"])
         self.assertGreaterEqual(entries[0]["region"][2], 0.24)
-        self.assertEqual(entries[0]["sourceRegion"][0:2], overlay.normalize_region([0.42, 0.82, 0.16, 0.04])[0:2])
+        self.assertEqual(entries[0]["sourceRegion"], (0.42, 0.82, 0.16, 0.04))
         self.assertEqual(entries[1]["region"], entries[1]["sourceRegion"])
 
     def test_detail_regions_are_kept_separate_for_source_blur(self) -> None:
