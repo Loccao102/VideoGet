@@ -297,14 +297,22 @@ def main() -> None:
     metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
 
     render_started = time.perf_counter()
-    # Final render deliberately uses input_path, not the compatibility proxy, so the
-    # source audio is preserved and the proxy never becomes the user's final media.
+    # Final render always uses the original source. OCR frames were decoded through
+    # an ffmpeg pipe, so there is no full-video compatibility proxy to keep or render.
     if initial_render_style == "ocr_overlay":
         render_ocr_overlay.render(input_path, vi_srt, metadata_path, output_video, platform, aspect=aspect)
     else:
         ocr.render_ocr_subtitles(input_path, vi_srt, output_video, text_region, segments, aspect)
     timings["render"] = round(time.perf_counter() - render_started, 3)
     timings["total"] = round(time.perf_counter() - started, 3)
+    # render_ocr_overlay enriches metadata with final aspect/branding details.
+    # Reload before adding timings so those render-stage fields survive.
+    try:
+        rendered_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        if isinstance(rendered_metadata, dict):
+            metadata = rendered_metadata
+    except Exception:
+        pass
     metadata["timings"] = timings
     metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
 
