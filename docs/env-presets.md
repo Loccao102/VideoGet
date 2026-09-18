@@ -251,6 +251,40 @@ OCR_OVERLAY_STYLE=clean
 - `capsule`: thêm nền mỏng bán trong suốt.
 - `box`: box đen kiểu cũ.
 
+### Tight OCR blur
+
+Từ pipeline mới, OCR lưu thêm `bboxRegions` cho từng segment. Đây là các bbox nhỏ của từng detection/dòng chữ tại frame đại diện, tách khỏi `bbox` union dùng để đặt subtitle Việt.
+
+Do đó cleanup mới là:
+
+```text
+bbox union
+  -> chỉ dùng để đặt sub Việt
+
+bboxRegions[]
+  -> blur riêng từng vùng chữ nguồn
+  -> không blur một khung lớn bao toàn bộ caption
+```
+
+Medium/default:
+
+```env
+OCR_OVERLAY_SOURCE_BLUR=14
+OCR_OVERLAY_SOURCE_BLUR_POWER=3
+OCR_SEGMENT_DETAIL_PAD_X=0.004
+OCR_SEGMENT_DETAIL_PAD_Y=0.004
+OCR_SEGMENT_DETAIL_MAX_BOXES=12
+```
+
+`OCR_OVERLAY_SOURCE_BLUR_POWER` tăng số pass boxblur, nên chữ nguồn bị phá nét mạnh hơn mà không cần tăng radius quá lớn. `OCR_SEGMENT_DETAIL_PAD_X/Y` chỉ nới nhẹ bbox OCR để ăn hết viền/outline của chữ; giữ nhỏ để tránh tạo cảm giác một mảng blur hình chữ nhật lớn.
+
+Preset:
+- Low: radius 12, power 2.
+- Medium: radius 14, power 3.
+- High: radius 16, power 3.
+
+Job cũ chưa có `bboxRegions` vẫn fallback về union bbox cũ. Muốn job cũ dùng cleanup nhỏ mới, chạy **OCR lại** để sinh metadata chi tiết rồi render lại.
+
 ---
 
 # 6. AV1 compatibility proxy
