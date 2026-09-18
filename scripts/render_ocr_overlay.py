@@ -449,9 +449,11 @@ def render(
         cmd += ["-i", str(badge_path)]
     cmd += ["-filter_complex", ";".join(filters), "-map", "[vout]"]
     if base.has_audio_stream(input_path):
-        # OCR->Sub does not modify audio. Stream-copy preserves it bit-for-bit
-        # and avoids a needless AAC decode/encode pass.
-        cmd += ["-map", "0:a:0", "-c:a", "copy"]
+        # Preserve audio bit-for-bit when the source codec is safe in MP4.
+        # For codecs such as Opus/Vorbis/PCM, transcode only the audio to AAC
+        # so the final MP4 remains broadly playable.
+        cmd += ["-map", "0:a:0"]
+        cmd += base.mp4_audio_codec_args(input_path)
     render_preset = os.getenv("OCR_RENDER_PRESET", "").strip() or os.getenv("VIDEO_PRESET", "veryfast")
     render_crf = os.getenv("OCR_RENDER_CRF", "").strip() or os.getenv("VIDEO_CRF", "18")
     cmd += [
