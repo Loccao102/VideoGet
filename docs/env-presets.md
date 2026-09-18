@@ -248,8 +248,57 @@ OCR_OVERLAY_STYLE=clean
 ```
 
 - `clean`: mặc định, blur chữ gốc + chữ Việt trắng đậm + outline/shadow.
+- `inpaint`: dùng bbox OCR theo thời gian để xóa hard-sub nguồn bằng OpenCV TELEA rồi mới burn sub Việt.
 - `capsule`: thêm nền mỏng bán trong suốt.
 - `box`: box đen kiểu cũ.
+
+UI của job OCR hoàn tất có nút **Xóa sub nguồn + chèn Việt** tương ứng với style `ocr_inpaint`. Nút này **không chạy lại OCR/dịch/TTS**; nó dùng metadata bbox đã có.
+
+### Inpaint CPU-first
+
+Mặc định an toàn vẫn là:
+
+```env
+OCR_SUBTITLE_INITIAL_RENDER_STYLE=ocr_overlay
+```
+
+Muốn job OCR mới tự thử inpaint ngay từ lần render đầu:
+
+```env
+OCR_SUBTITLE_INITIAL_RENDER_STYLE=ocr_inpaint
+```
+
+Các thông số chính:
+
+```env
+OCR_INPAINT_MASK_MODE=strokes
+OCR_INPAINT_METHOD=telea
+OCR_INPAINT_RADIUS=3
+OCR_INPAINT_PAD_X=0.004
+OCR_INPAINT_PAD_Y=0.004
+OCR_INPAINT_CONTRAST=22
+OCR_INPAINT_DILATE=3
+OCR_INPAINT_TEMP_PRESET=veryfast
+OCR_INPAINT_TEMP_CRF=14
+OCR_INPAINT_FALLBACK_BLUR=true
+```
+
+Flow hiện tại:
+
+```text
+source video
+  -> bbox OCR theo segment
+  -> ffmpeg decode frame (không phụ thuộc OpenCV AV1 decoder)
+  -> tạo mask nét chữ trong bbox
+  -> cv2.inpaint TELEA
+  -> intermediate chất lượng cao
+  -> burn ASS tiếng Việt + branding
+  -> final output
+```
+
+`strokes` cố chỉ mask nét chữ/outline. Nếu mask quá ít, helper có fallback box **chỉ trong bbox OCR đã thu hẹp**, không phải một panel lớn toàn màn hình.
+
+Đây là bản CPU-first nên chậm hơn blur rõ rệt và hiện vẫn có thêm một encode intermediate. `OCR_INPAINT_TEMP_CRF=14` được dùng để hạn chế suy hao giữa hai lượt encode. Nếu OpenCV inpaint hoặc FFmpeg fail và `OCR_INPAINT_FALLBACK_BLUR=true`, renderer quay lại cleanup blur cũ thay vì làm hỏng job.
 
 ---
 
