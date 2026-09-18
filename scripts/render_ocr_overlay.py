@@ -309,8 +309,8 @@ def render(
     brand_regions, brand_side, brand_detection = resolve_bilibili_brand(input_path, metadata, platform)
     video_label, cleanup_index = add_bilibili_cleanup(filters, video_label, cleanup_index, brand_regions)
 
-    source_blur = smart.env_int("OCR_OVERLAY_SOURCE_BLUR", 20, 2)
-    source_blur_power = smart.env_int("OCR_OVERLAY_SOURCE_BLUR_POWER", 2, 1)
+    source_blur = smart.env_int("OCR_OVERLAY_SOURCE_BLUR", 14, 2)
+    source_blur_power = smart.env_int("OCR_OVERLAY_SOURCE_BLUR_POWER", 3, 1)
     capsule_alpha = clamp(smart.env_float("OCR_OVERLAY_CAPSULE_ALPHA", 0.24, 0.0), 0.0, 1.0)
     box_alpha = clamp(smart.env_float("OCR_OVERLAY_BOTTOM_BOX_ALPHA", 0.88, 0.0), 0.0, 1.0)
     max_segments = smart.env_int("OCR_OVERLAY_MAX_SEGMENTS", 240, 10)
