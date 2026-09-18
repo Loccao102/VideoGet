@@ -81,6 +81,11 @@ def prepare_ocr_input(input_path: Path, output_dir: Path) -> tuple[Path, bool, s
     proxy = output_dir / f"{input_path.stem}.ocr-decode-proxy.mp4"
     preset = os.getenv("OCR_DECODE_PROXY_PRESET", "ultrafast").strip() or "ultrafast"
     crf = str(ocr.env_int("OCR_DECODE_PROXY_CRF", 28, 0))
+    # The proxy exists only so OpenCV can sample OCR frames. It does not need
+    # source resolution or frame rate. Downscaling here dramatically reduces
+    # CPU, disk I/O and temporary H.264 size for AV1 sources.
+    max_width = ocr.env_int("OCR_DECODE_PROXY_MAX_WIDTH", 1280, 320)
+    proxy_fps = ocr.env_float("OCR_DECODE_PROXY_FPS", 12.0, 1.0)
     # Keep this numeric until the ffmpeg command is built. Converting it to str
     # before the comparison causes Python 3 to raise: str > int.
     threads = ocr.env_int("OCR_DECODE_PROXY_THREADS", 0, 0)
@@ -88,7 +93,10 @@ def prepare_ocr_input(input_path: Path, output_dir: Path) -> tuple[Path, bool, s
     reason = f"codec={codec or 'unknown'}" if codec else "OpenCV cannot decode source"
     if force_proxy:
         reason += ", forced by OCR_FORCE_DECODE_PROXY"
-    base.log(f"OCR decode compatibility proxy required ({reason}); transcoding video-only H.264 proxy on CPU")
+    base.log(
+        "OCR decode compatibility proxy required "
+        f"({reason}); H.264 proxy maxWidth={max_width}, fps={proxy_fps:g}, crf={crf}"
+    )
 
     cmd = [
         "ffmpeg",
@@ -102,6 +110,8 @@ def prepare_ocr_input(input_path: Path, output_dir: Path) -> tuple[Path, bool, s
         "-map",
         "0:v:0",
         "-an",
+        "-vf",
+        f"scale='min({max_width},iw)':-2:flags=fast_bilinear,fps={proxy_fps:g}",
         "-c:v",
         "libx264",
         "-preset",
