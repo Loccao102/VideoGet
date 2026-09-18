@@ -77,6 +77,13 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 			"enabled":     true,
 			"concurrency": envPositiveInt("PREVIEW_CONCURRENCY", 4),
 		},
+		"outputAspects": []string{
+			download.OutputAspectOriginal,
+			download.OutputAspect16x9,
+			download.OutputAspect3x4,
+			download.OutputAspect9x16,
+			download.OutputAspect1x1,
+		},
 		"time": time.Now().UTC(),
 	})
 }
@@ -341,8 +348,9 @@ func envPositiveInt(name string, fallback int) int {
 
 func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Video model.Video `json:"video"`
-		Mode  string      `json:"mode"`
+		Video  model.Video `json:"video"`
+		Mode   string      `json:"mode"`
+		Aspect string      `json:"aspect"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
@@ -369,7 +377,7 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	job, err := s.jobs.StartWithMode(req.Video, req.Mode)
+	job, err := s.jobs.StartWithModeAndAspect(req.Video, req.Mode, req.Aspect)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
