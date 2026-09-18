@@ -22,7 +22,6 @@ import subprocess
 import time
 from pathlib import Path
 
-import cv2
 
 import bilibili_brand
 import localize as base
@@ -54,88 +53,6 @@ def video_codec(path: Path) -> str:
         base.log(f"OCR codec probe failed; OpenCV decode check will decide fallback: {process.stderr.strip()[:400]}")
         return ""
     return process.stdout.strip().lower()
-
-
-def opencv_can_decode(path: Path) -> bool:
-    cap = cv2.VideoCapture(str(path))
-    try:
-        if not cap.isOpened():
-            return False
-        ok, frame = cap.read()
-        return bool(ok and frame is not None and frame.size > 0)
-    finally:
-        cap.release()
-
-
-def prepare_ocr_input(input_path: Path, output_dir: Path) -> tuple[Path, bool, str]:
-    """Return an OpenCV-readable OCR source while keeping final render on input_path."""
-    codec = video_codec(input_path)
-    force_proxy = ocr.env_bool("OCR_FORCE_DECODE_PROXY", False)
-    needs_proxy = force_proxy or codec in {"av1", "av01"}
-
-    if not needs_proxy:
-        needs_proxy = not opencv_can_decode(input_path)
-
-    if not needs_proxy:
-        return input_path, False, codec
-
-    proxy = output_dir / f"{input_path.stem}.ocr-decode-proxy.mp4"
-    preset = os.getenv("OCR_DECODE_PROXY_PRESET", "ultrafast").strip() or "ultrafast"
-    crf = str(ocr.env_int("OCR_DECODE_PROXY_CRF", 28, 0))
-    # The proxy exists only so OpenCV can sample OCR frames. It does not need
-    # source resolution or frame rate. Downscaling here dramatically reduces
-    # CPU, disk I/O and temporary H.264 size for AV1 sources.
-    max_width = ocr.env_int("OCR_DECODE_PROXY_MAX_WIDTH", 1280, 320)
-    proxy_fps = ocr.env_float("OCR_DECODE_PROXY_FPS", 12.0, 1.0)
-    # Keep this numeric until the ffmpeg command is built. Converting it to str
-    # before the comparison causes Python 3 to raise: str > int.
-    threads = ocr.env_int("OCR_DECODE_PROXY_THREADS", 0, 0)
-
-    reason = f"codec={codec or 'unknown'}" if codec else "OpenCV cannot decode source"
-    if force_proxy:
-        reason += ", forced by OCR_FORCE_DECODE_PROXY"
-    base.log(
-        "OCR decode compatibility proxy required "
-        f"({reason}); H.264 proxy maxWidth={max_width}, fps={proxy_fps:g}, crf={crf}"
-    )
-
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-loglevel",
-        "error",
-        "-hwaccel",
-        "none",
-        "-i",
-        str(input_path),
-        "-map",
-        "0:v:0",
-        "-an",
-        "-vf",
-        f"scale='min({max_width},iw)':-2:flags=fast_bilinear,fps={proxy_fps:g}",
-        "-c:v",
-        "libx264",
-        "-preset",
-        preset,
-        "-crf",
-        crf,
-        "-pix_fmt",
-        "yuv420p",
-    ]
-    if threads > 0:
-        cmd += ["-threads", str(threads)]
-    cmd += ["-movflags", "+faststart", str(proxy)]
-    base.run(cmd)
-
-    if not proxy.exists() or proxy.stat().st_size <= 0:
-        raise RuntimeError("ffmpeg created no usable OCR decode proxy")
-    base.log(f"OCR proxy ready: {proxy.stat().st_size / (1024 * 1024):.1f} MiB")
-    if not opencv_can_decode(proxy):
-        raise RuntimeError(
-            "source video cannot be decoded by OpenCV even after H.264 compatibility transcoding; "
-            "check ffmpeg AV1 software decoder support"
-        )
-    return proxy, True, codec
 
 
 def infer_platform(input_path: Path) -> str:
