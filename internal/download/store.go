@@ -58,6 +58,7 @@ func (s *jobStore) init() error {
 			error TEXT NOT NULL DEFAULT '',
 			attempts INTEGER NOT NULL DEFAULT 1,
 			processing_mode TEXT NOT NULL DEFAULT 'dub',
+			output_aspect TEXT NOT NULL DEFAULT 'original',
 			subtitle_revision INTEGER NOT NULL DEFAULT 0,
 			created_at INTEGER NOT NULL,
 			updated_at INTEGER NOT NULL
@@ -70,6 +71,9 @@ func (s *jobStore) init() error {
 		}
 	}
 	if err := s.ensureColumn("processing_mode", "TEXT NOT NULL DEFAULT 'dub'"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("output_aspect", "TEXT NOT NULL DEFAULT 'original'"); err != nil {
 		return err
 	}
 	if err := s.ensureColumn("subtitle_revision", "INTEGER NOT NULL DEFAULT 0"); err != nil {
@@ -132,8 +136,8 @@ func (s *jobStore) Upsert(job Job) error {
 	_, err = s.db.Exec(`
 		INSERT INTO jobs (
 			id, status, video_json, source_output, output, localization_json,
-			error, attempts, processing_mode, subtitle_revision, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			error, attempts, processing_mode, output_aspect, subtitle_revision, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			status = excluded.status,
 			video_json = excluded.video_json,
@@ -143,6 +147,7 @@ func (s *jobStore) Upsert(job Job) error {
 			error = excluded.error,
 			attempts = excluded.attempts,
 			processing_mode = excluded.processing_mode,
+			output_aspect = excluded.output_aspect,
 			subtitle_revision = excluded.subtitle_revision,
 			created_at = excluded.created_at,
 			updated_at = excluded.updated_at
@@ -156,6 +161,7 @@ func (s *jobStore) Upsert(job Job) error {
 		job.Error,
 		job.Attempts,
 		normalizeProcessingMode(job.ProcessingMode),
+		normalizeOutputAspect(job.OutputAspect),
 		job.SubtitleRevision,
 		job.CreatedAt.UnixNano(),
 		job.UpdatedAt.UnixNano(),
@@ -169,7 +175,7 @@ func (s *jobStore) Upsert(job Job) error {
 func (s *jobStore) LoadAll() ([]Job, error) {
 	rows, err := s.db.Query(`
 		SELECT id, status, video_json, source_output, output, localization_json,
-		       error, attempts, processing_mode, subtitle_revision, created_at, updated_at
+		       error, attempts, processing_mode, output_aspect, subtitle_revision, created_at, updated_at
 		FROM jobs
 		ORDER BY created_at DESC
 	`)
@@ -198,6 +204,7 @@ func (s *jobStore) LoadAll() ([]Job, error) {
 			&job.Error,
 			&job.Attempts,
 			&job.ProcessingMode,
+			&job.OutputAspect,
 			&job.SubtitleRevision,
 			&createdAt,
 			&updatedAt,
@@ -206,6 +213,7 @@ func (s *jobStore) LoadAll() ([]Job, error) {
 		}
 		job.Status = JobStatus(status)
 		job.ProcessingMode = normalizeProcessingMode(job.ProcessingMode)
+		job.OutputAspect = normalizeOutputAspect(job.OutputAspect)
 		job.CreatedAt = time.Unix(0, createdAt).UTC()
 		job.UpdatedAt = time.Unix(0, updatedAt).UTC()
 		if err := json.Unmarshal([]byte(videoJSON), &job.Video); err != nil {
