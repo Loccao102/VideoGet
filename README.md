@@ -19,8 +19,11 @@ chủ đề tiếng Việt
 ## Tính năng hiện tại
 
 ### Discovery
-- Search **Douyin** không phụ thuộc CLI riêng: dùng public web index để lấy canonical `douyin.com/video/...` URL.
-- Search **Bilibili** qua `bilibili-cli`; request được throttle để giảm lỗi risk-control `-412`.
+- UI có hai chế độ: **Theo từ khóa** và **Theo kênh / creator**.
+- **Theo từ khóa** giữ flow hiện tại: có thể mở rộng keyword Trung, search nhiều query, deduplicate, áp filter rồi ranking.
+- **Theo kênh / creator** tắt keyword expansion, lấy candidate rộng hơn rồi chỉ giữ video có `Author` khớp chính xác tên kênh sau normalize (`@`, khoảng trắng, `_`/`-`). Video của author khác hoặc thiếu author bị loại.
+- Search **Douyin** không phụ thuộc CLI riêng: dùng public web index để lấy canonical `douyin.com/video/...` URL; native search có thể trả author để dùng channel filter.
+- Search **Bilibili** qua `bilibili-cli`; kết quả có `owner_name` nên hỗ trợ channel filter trực tiếp; request được throttle để giảm lỗi risk-control `-412`.
 - Keyword expander deterministic + Ollama cho chủ đề tiếng Việt.
 - Search nhiều keyword, deduplicate, filter và xếp hạng candidate.
 - Score `engagement`, `recency`, `relevance`, `trend`, `overall`.
