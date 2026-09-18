@@ -88,6 +88,8 @@ transcript cache hit
 - Giữ file `.srt` để chỉnh sửa/re-render.
 - Tạo `*.vi-dubbed.mp4` đã burn subtitle Việt trực tiếp vào video.
 - OCR cleanup lưu bbox nhỏ theo từng detection/dòng chữ và blur riêng từng bbox; không còn bắt buộc gom cả caption thành một khung blur lớn.
+- AV1 OCR proxy không còn cần giữ nguyên 1080p/30fps: proxy có thể downscale + giảm fps chỉ để OCR. Preset Low dùng 960px / 8fps / CRF 30 và xóa proxy ngay sau OCR; final render vẫn dùng source gốc.
+- Bilibili brand detection tái sử dụng OCR-compatible input để tránh tạo thêm một AV1→H.264 proxy thứ hai trong cùng pipeline.
 - Blur nguồn dùng multi-pass mạnh hơn để phá nét chữ sâu hơn nhưng giữ vùng ảnh bị tác động nhỏ.
 - Có thể blur vùng subtitle nguồn đã burn sẵn và các vùng watermark/logo cấu hình.
 - Color-grade nhẹ trước khi export.
