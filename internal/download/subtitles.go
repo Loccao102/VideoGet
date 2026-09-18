@@ -238,15 +238,25 @@ func (m *Manager) runSubtitleRender(id, style, overlayStyle string) {
 		return
 	}
 
+	finalOutput := output
+	if job.OutputAspect != OutputAspectOriginal {
+		converted, convertErr := m.applyOutputAspect(ctx, output, job.OutputAspect)
+		if convertErr != nil {
+			m.fail(id, JobLocalizationFailed, convertErr)
+			return
+		}
+		finalOutput = converted
+	}
+
 	m.update(id, func(current *Job) {
 		current.Status = JobDone
 		current.Error = ""
-		current.Output = output
+		current.Output = finalOutput
 		if current.Localization == nil {
 			current.Localization = &localize.Result{VietnameseSubtitle: subtitle}
 		}
 		current.Localization.VietnameseSubtitle = subtitle
-		current.Localization.OutputVideo = output
+		current.Localization.OutputVideo = finalOutput
 		current.UpdatedAt = time.Now().UTC()
 	})
 }
