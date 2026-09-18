@@ -31,6 +31,8 @@ jobs:
         run: python scripts/test_layout_optional_faces.py
       - name: OCR overlay bbox regression
         run: python scripts/test_ocr_overlay_regions.py
+      - name: Smart blur radius regression
+        run: python scripts/test_smart_blur.py
       - name: Bilibili brand side regression
         run: python scripts/test_bilibili_brand.py
       - run: >-
@@ -54,6 +56,7 @@ jobs:
           scripts/test_convert_aspect.py
           scripts/test_layout_optional_faces.py
           scripts/test_ocr_overlay_regions.py
+          scripts/test_smart_blur.py
           scripts/test_bilibili_brand.py
           scripts/rerender_ocr_music.py
           scripts/render_subtitles.py
