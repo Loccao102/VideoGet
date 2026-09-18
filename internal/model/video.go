@@ -40,8 +40,9 @@ type SearchFilters struct {
 }
 
 type SearchRequest struct {
-	Keyword string        `json:"keyword"`
-	Sources []string      `json:"sources"`
+	Keyword    string        `json:"keyword"`
+	SearchMode string        `json:"searchMode,omitempty"`
+	Sources    []string      `json:"sources"`
 	Limit   int           `json:"limit"`
 	Expand  bool          `json:"expand"`
 	Sort    string        `json:"sort,omitempty"`
@@ -49,7 +50,8 @@ type SearchRequest struct {
 }
 
 type SearchResponse struct {
-	Keyword  string            `json:"keyword"`
+	Keyword    string            `json:"keyword"`
+	SearchMode string            `json:"searchMode,omitempty"`
 	Keywords []string          `json:"keywords"`
 	Results  []Video           `json:"results"`
 	Errors   map[string]string `json:"errors,omitempty"`
