@@ -31,6 +31,8 @@ jobs:
         run: python scripts/test_layout_optional_faces.py
       - name: OCR overlay bbox regression
         run: python scripts/test_ocr_overlay_regions.py
+      - name: OCR inpaint regression
+        run: python scripts/test_ocr_inpaint.py
       - name: Bilibili brand side regression
         run: python scripts/test_bilibili_brand.py
       - run: >-
@@ -48,12 +50,14 @@ jobs:
           scripts/localize_ocr_music_branded.py
           scripts/localize_ocr_subtitles.py
           scripts/ocr_segment_regions.py
+          scripts/inpaint_subtitles.py
           scripts/bilibili_brand.py
           scripts/brand_badge.py
           scripts/test_ocr_decode_proxy.py
           scripts/test_convert_aspect.py
           scripts/test_layout_optional_faces.py
           scripts/test_ocr_overlay_regions.py
+          scripts/test_ocr_inpaint.py
           scripts/test_bilibili_brand.py
           scripts/rerender_ocr_music.py
           scripts/render_subtitles.py
