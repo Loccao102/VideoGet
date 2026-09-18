@@ -135,6 +135,10 @@ Giữ nguyên
 
 UI mặc định chọn **3:4** cho workflow TikTok / Reels / YouTube Shorts. Video nguồn luôn được giữ nguyên; VideoGet chỉ tạo thêm derivative ở cuối pipeline.
 
+Với **job đã hoàn tất**, UI còn có **Xuất thêm tỉ lệ**. Có thể lấy cùng một bản video đã hoàn thiện và tạo thêm 3:4 / 9:16 / 16:9 / 1:1 mà **không chạy lại OCR, dịch, TTS hay render subtitle**. Các derivative đã tạo được lưu trong `aspectOutputs` của job; bản chính trong `output` không bị ghi đè.
+
+VideoGet giữ riêng `renderedOutput` là bản hoàn chỉnh **trước bước đổi aspect**. Vì vậy khi tạo thêm tỉ lệ, hệ thống luôn xuất từ bản này thay vì lấy 3:4 rồi convert tiếp sang 9:16, tránh encode/crop chồng làm giảm chất lượng.
+
 Chiến lược mặc định là `auto`:
 
 - center-crop khi vẫn giữ được đủ phần khung nguồn;
@@ -311,6 +315,19 @@ Retry job lỗi:
 ```http
 POST /api/jobs/{id}/retry
 ```
+
+Tạo thêm một bản tỉ lệ khác từ **job đã hoàn tất**:
+
+```http
+POST /api/jobs/{id}/aspect/render
+Content-Type: application/json
+
+{
+  "aspect": "9:16"
+}
+```
+
+Endpoint này không chạy lại OCR/dịch/TTS/subtitle. Nó dùng `renderedOutput` trước bước đổi aspect và thêm kết quả vào `aspectOutputs`.
 
 Job hoàn tất có thể trả thêm số liệu:
 

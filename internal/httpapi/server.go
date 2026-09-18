@@ -48,6 +48,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/jobs/{id}/subtitle", s.getSubtitle)
 	mux.HandleFunc("PUT /api/jobs/{id}/subtitle", s.saveSubtitle)
 	mux.HandleFunc("POST /api/jobs/{id}/subtitle/render", s.rerenderSubtitle)
+	mux.HandleFunc("POST /api/jobs/{id}/aspect/render", s.renderAspect)
 	if s.web != nil {
 		mux.Handle("/", http.FileServer(http.FS(s.web)))
 	}

@@ -413,6 +413,8 @@ UI mặc định chọn `3:4`, còn API cũ nếu không truyền `aspect` vẫn
 
 Video gốc luôn được giữ ở `SourceOutput`. Bước đổi tỉ lệ chỉ chạy **sau khi download/localization/render hoàn tất**, vì vậy retry OCR/subtitle vẫn sử dụng source gốc và không bị encode chồng nhiều lần.
 
+Job đã hoàn tất còn giữ `RenderedOutput`: đây là bản nội dung cuối cùng trước bước đổi aspect. UI **Xuất thêm tỉ lệ** luôn dùng bản này để tạo derivative mới và lưu đường dẫn theo ratio trong `AspectOutputs`; không OCR/dịch/TTS/sub lại và không convert từ một derivative trước đó sang derivative tiếp theo.
+
 ## `ASPECT_CONVERT_MODE`
 
 ```env

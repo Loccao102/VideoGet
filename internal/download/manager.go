@@ -25,6 +25,7 @@ const (
 	JobDownloading        JobStatus = "downloading"
 	JobLocalizing         JobStatus = "localizing"
 	JobRendering          JobStatus = "rendering"
+	JobAspectRendering    JobStatus = "aspect_rendering"
 	JobDone               JobStatus = "done"
 	JobFailed             JobStatus = "failed"
 	JobLocalizationFailed JobStatus = "localization_failed"
@@ -43,10 +44,12 @@ type Job struct {
 	Status           JobStatus        `json:"status"`
 	Video            model.Video      `json:"video"`
 	ProcessingMode   string           `json:"processingMode"`
-	OutputAspect     string           `json:"outputAspect,omitempty"`
-	SubtitleRevision int              `json:"subtitleRevision,omitempty"`
-	SourceOutput     string           `json:"sourceOutput,omitempty"`
-	Output           string           `json:"output,omitempty"`
+	OutputAspect     string            `json:"outputAspect,omitempty"`
+	AspectOutputs    map[string]string `json:"aspectOutputs,omitempty"`
+	RenderedOutput   string            `json:"renderedOutput,omitempty"`
+	SubtitleRevision int               `json:"subtitleRevision,omitempty"`
+	SourceOutput     string            `json:"sourceOutput,omitempty"`
+	Output           string            `json:"output,omitempty"`
 	Localization     *localize.Result `json:"localization,omitempty"`
 	Error            string           `json:"error,omitempty"`
 	Attempts         int              `json:"attempts"`
@@ -107,6 +110,17 @@ func NewManager(downloadDir string) (*Manager, error) {
 			job.Status = JobQueued
 			job.UpdatedAt = time.Now().UTC()
 			resume = append(resume, job.ID)
+			if err := store.Upsert(job); err != nil {
+				_ = store.Close()
+				return nil, err
+			}
+		case JobAspectRendering:
+			// An alternate aspect export is derived from an already completed
+			// render. Do not rerun OCR/localization after a restart; return the
+			// job to done and let the user request that derivative again.
+			job.Status = JobDone
+			job.Error = "aspect render was interrupted by restart; run that aspect export again"
+			job.UpdatedAt = time.Now().UTC()
 			if err := store.Upsert(job); err != nil {
 				_ = store.Close()
 				return nil, err
@@ -193,7 +207,7 @@ func (m *Manager) Retry(id string) (Job, error) {
 		return Job{}, fmt.Errorf("job not found")
 	}
 	switch job.Status {
-	case JobQueued, JobDownloading, JobLocalizing, JobRendering:
+	case JobQueued, JobDownloading, JobLocalizing, JobRendering, JobAspectRendering:
 		m.mu.Unlock()
 		return Job{}, fmt.Errorf("job is already running")
 	case JobDone:
@@ -345,8 +359,13 @@ func (m *Manager) run(id string) {
 		}
 		m.update(id, func(job *Job) {
 			job.Status = JobDone
+			job.RenderedOutput = sourceOutput
 			job.Output = finalOutput
 			job.Error = ""
+			job.AspectOutputs = map[string]string{OutputAspectOriginal: sourceOutput}
+			if job.OutputAspect != OutputAspectOriginal {
+				job.AspectOutputs[job.OutputAspect] = finalOutput
+			}
 			job.UpdatedAt = time.Now().UTC()
 		})
 		return
@@ -379,7 +398,8 @@ func (m *Manager) run(id string) {
 		return
 	}
 
-	finalOutput := result.OutputVideo
+	renderedOutput := result.OutputVideo
+	finalOutput := renderedOutput
 	if job.OutputAspect != OutputAspectOriginal {
 		m.update(id, func(current *Job) {
 			current.Status = JobRendering
@@ -398,8 +418,13 @@ func (m *Manager) run(id string) {
 	m.update(id, func(job *Job) {
 		job.Status = JobDone
 		job.Localization = &result
+		job.RenderedOutput = renderedOutput
 		job.Error = ""
 		job.Output = finalOutput
+		job.AspectOutputs = map[string]string{OutputAspectOriginal: renderedOutput}
+		if job.OutputAspect != OutputAspectOriginal {
+			job.AspectOutputs[job.OutputAspect] = finalOutput
+		}
 		job.UpdatedAt = time.Now().UTC()
 	})
 }
