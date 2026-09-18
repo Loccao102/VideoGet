@@ -40,6 +40,18 @@ class OCRDecodeProxySourceTests(unittest.TestCase):
         self.assertEqual(value.func.value.id, "ocr")
         self.assertEqual(value.func.attr, "env_int")
 
+    def test_empty_ocr_has_one_automatic_recovery_pass(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+        self.assertIn("OCR_RETRY_ON_EMPTY", source)
+        self.assertIn("OCR_RETRY_REGION", source)
+        self.assertIn("OCR_RETRY_MIN_CONFIDENCE", source)
+        self.assertIn("OCR first pass found 0 timed segments; retrying once", source)
+
+    def test_manual_ocr_region_is_not_overridden(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+        self.assertIn('original_region.lower() in {"", "auto"}', source)
+
+
     def test_threads_comparison_is_numeric(self) -> None:
         comparisons = [
             node.test
