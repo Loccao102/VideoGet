@@ -121,6 +121,28 @@ VideoGet có 3 cấu hình phần cứng:
 
 Chi tiết cách chọn máy, ý nghĩa `LOCALIZE_CONCURRENCY`, `OCR_FPS`, `OCR_MODEL_SIZE`, Ollama, Whisper, AV1 proxy và render nằm tại [docs/env-presets.md](docs/env-presets.md).
 
+## Tỉ lệ output social
+
+UI có option **Tỉ lệ xuất** cho từng job. Các lựa chọn hiện tại:
+
+```text
+Giữ nguyên
+16:9
+3:4
+9:16
+1:1
+```
+
+UI mặc định chọn **3:4** cho workflow TikTok / Reels / YouTube Shorts. Video nguồn luôn được giữ nguyên; VideoGet chỉ tạo thêm derivative ở cuối pipeline.
+
+Chiến lược mặc định là `auto`:
+
+- center-crop khi vẫn giữ được đủ phần khung nguồn;
+- nếu crop quá mạnh thì chuyển sang **blur-fill** để giữ toàn bộ nội dung;
+- `16:9 -> 3:4` hiện đủ ngưỡng để center-crop;
+- `16:9 -> 9:16` thường fallback blur-fill để tránh cắt quá nhiều hai bên.
+
+
 ## Chạy bằng Docker
 
 Lần đầu:
@@ -266,7 +288,9 @@ Content-Type: application/json
     "platform": "bilibili",
     "title": "Example",
     "url": "https://www.bilibili.com/video/..."
-  }
+  },
+  "mode": "ocr_subtitles",
+  "aspect": "3:4"
 }
 ```
 
@@ -358,6 +382,9 @@ downloads/
 | `TTS_RATE` | `+8%` | tốc độ TTS |
 | `VIDEO_CLEANUP` | `true` | cleanup trước final render |
 | `BURN_SUBTITLES` | `true` | hard-sub tiếng Việt |
+| `ASPECT_CONVERT_MODE` | `auto` | auto crop hoặc blur-fill cho tỉ lệ output |
+| `ASPECT_CROP_MIN_RETAIN` | `0.40` | ngưỡng phần khung cần giữ để cho phép crop |
+| `ASPECT_OUTPUT_CRF` | `18` | chất lượng encode derivative social |
 | `ORIGINAL_AUDIO_VOLUME` | `0.08` | audio gốc dưới voice Việt |
 
 ## Kiến trúc hiện tại
