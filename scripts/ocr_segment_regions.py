@@ -69,6 +69,57 @@ def _robust_bbox(regions: list[tuple[float, float, float, float]]) -> tuple[floa
     return _expand((left, top, max(0.02, right - left), max(0.015, bottom - top)))
 
 
+def _expand_detail(region: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
+    """Small padding for source-text cleanup; deliberately tighter than subtitle placement."""
+    x, y, w, h = region
+    pad_x = _env_float("OCR_SEGMENT_DETAIL_PAD_X", 0.004)
+    pad_y = _env_float("OCR_SEGMENT_DETAIL_PAD_Y", 0.004)
+    nx = ocr.clamp(x - pad_x, 0.0, 0.995)
+    ny = ocr.clamp(y - pad_y, 0.0, 0.995)
+    right = ocr.clamp(x + w + pad_x, nx + 0.005, 1.0)
+    bottom = ocr.clamp(y + h + pad_y, ny + 0.005, 1.0)
+    return nx, ny, right - nx, bottom - ny
+
+
+def _merge_overlapping_boxes(
+    boxes: list[tuple[float, float, float, float]],
+) -> list[tuple[float, float, float, float]]:
+    """Merge only boxes that clearly belong to the same OCR text line/word run."""
+    if not boxes:
+        return []
+    pending = sorted(boxes, key=lambda item: (item[1], item[0]))
+    merged: list[list[float]] = []
+    y_tolerance = _env_float("OCR_SEGMENT_DETAIL_Y_TOLERANCE", 0.012)
+    x_gap = _env_float("OCR_SEGMENT_DETAIL_X_GAP", 0.018)
+
+    for x, y, w, h in pending:
+        right = x + w
+        bottom = y + h
+        cy = y + h / 2.0
+        matched = False
+        for item in merged:
+            ix, iy, iw, ih = item
+            iright = ix + iw
+            ibottom = iy + ih
+            icy = iy + ih / 2.0
+            vertical_overlap = max(0.0, min(bottom, ibottom) - max(y, iy))
+            min_h = max(0.001, min(h, ih))
+            same_line = vertical_overlap / min_h >= 0.45 or abs(cy - icy) <= y_tolerance
+            close_x = x <= iright + x_gap and right >= ix - x_gap
+            if same_line and close_x:
+                nx = min(ix, x)
+                ny = min(iy, y)
+                nr = max(iright, right)
+                nb = max(ibottom, bottom)
+                item[:] = [nx, ny, nr - nx, nb - ny]
+                matched = True
+                break
+        if not matched:
+            merged.append([x, y, w, h])
+
+    return [_expand_detail(tuple(item)) for item in merged]
+
+
 def _sample_times(start: float, end: float, count: int) -> list[float]:
     if end <= start:
         return [max(0.0, start)]
@@ -105,16 +156,19 @@ def attach_segment_bboxes(input_path: Path, segments: list[dict], video_info: di
             source_text = str(segment.get("text", ""))
             candidate_regions: list[tuple[float, float, float, float]] = []
             matched_samples = 0
+            best_detail_boxes: list[tuple[float, float, float, float]] = []
+            best_detail_score = -1.0
 
             for timestamp in _sample_times(start, end, sample_count):
                 cap.set(cv2.CAP_PROP_POS_MSEC, max(0.0, timestamp) * 1000.0)
                 ok, frame = cap.read()
                 if not ok or frame is None:
                     continue
-                detected_text, _, boxes = ocr.ocr_frame(engine, frame, broad_region, min_confidence)
+                detected_text, confidence, boxes = ocr.ocr_frame(engine, frame, broad_region, min_confidence)
                 if not detected_text or not boxes:
                     continue
-                if source_text and ocr.similarity(source_text, detected_text) < text_similarity:
+                similarity = ocr.similarity(source_text, detected_text) if source_text else 1.0
+                if source_text and similarity < text_similarity:
                     continue
                 frame_region = _frame_union(boxes)
                 if frame_region is None:
@@ -122,11 +176,25 @@ def attach_segment_bboxes(input_path: Path, segments: list[dict], video_info: di
                 candidate_regions.append(frame_region)
                 matched_samples += 1
 
+                # Preserve a representative set of OCR boxes instead of flattening
+                # every line/word into one large rectangle. The renderer uses these
+                # tight regions only for source-text blur; the union bbox remains for
+                # Vietnamese subtitle placement.
+                detail_score = similarity * max(0.01, float(confidence))
+                if detail_score > best_detail_score:
+                    best_detail_score = detail_score
+                    best_detail_boxes = _merge_overlapping_boxes(boxes)
+
             bbox = _robust_bbox(candidate_regions)
             if bbox is None:
                 continue
 
             segment["bbox"] = [round(value, 6) for value in bbox]
+            if best_detail_boxes:
+                segment["bboxRegions"] = [
+                    [round(value, 6) for value in region]
+                    for region in best_detail_boxes
+                ]
             segment["bboxConfidence"] = round(matched_samples / max(1, sample_count), 3)
             segment["placement"] = "bottom" if bbox[1] + bbox[3] >= bottom_threshold else "upper"
             attached += 1
