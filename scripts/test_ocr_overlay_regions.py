@@ -81,7 +81,9 @@ class OCROverlayStyleTests(unittest.TestCase):
         self.assertEqual(overlay.normalize_style("ocr_overlay"), "clean")
         self.assertEqual(overlay.normalize_style("ocr_clean"), "clean")
 
-    def test_capsule_and_box_aliases(self) -> None:
+    def test_inpaint_capsule_and_box_aliases(self) -> None:
+        self.assertEqual(overlay.normalize_style("ocr_inpaint"), "inpaint")
+        self.assertEqual(overlay.normalize_style("inpaint"), "inpaint")
         self.assertEqual(overlay.normalize_style("ocr_capsule"), "capsule")
         self.assertEqual(overlay.normalize_style("ocr_box"), "box")
 
@@ -103,7 +105,8 @@ class OCRDefaultRenderTests(unittest.TestCase):
 
     def test_initial_render_defaults_to_overlay(self) -> None:
         self.assertIn('OCR_SUBTITLE_INITIAL_RENDER_STYLE", "ocr_overlay"', self.source)
-        self.assertIn("render_ocr_overlay.render(input_path, vi_srt, metadata_path, output_video, platform)", self.source)
+        self.assertIn('initial_render_style in {"ocr_overlay", "ocr_inpaint"}', self.source)
+        self.assertIn('overlay_style = "inpaint" if initial_render_style == "ocr_inpaint" else None', self.source)
 
     def test_bilibili_can_be_inferred_from_bv_filename(self) -> None:
         self.assertIn('return "bilibili"', self.source)
