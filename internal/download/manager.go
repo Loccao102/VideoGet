@@ -43,6 +43,7 @@ type Job struct {
 	Status           JobStatus        `json:"status"`
 	Video            model.Video      `json:"video"`
 	ProcessingMode   string           `json:"processingMode"`
+	OutputAspect     string           `json:"outputAspect,omitempty"`
 	SubtitleRevision int              `json:"subtitleRevision,omitempty"`
 	SourceOutput     string           `json:"sourceOutput,omitempty"`
 	Output           string           `json:"output,omitempty"`
@@ -100,6 +101,7 @@ func NewManager(downloadDir string) (*Manager, error) {
 			job.Attempts = 1
 		}
 		job.ProcessingMode = normalizeProcessingMode(job.ProcessingMode)
+		job.OutputAspect = normalizeOutputAspect(job.OutputAspect)
 		switch job.Status {
 		case JobQueued, JobDownloading, JobLocalizing, JobRendering:
 			job.Status = JobQueued
@@ -143,14 +145,22 @@ func (m *Manager) Close() error {
 
 // Start preserves the legacy behavior for callers that do not specify a mode.
 func (m *Manager) Start(video model.Video) (Job, error) {
-	return m.StartWithMode(video, ProcessingDub)
+	return m.StartWithModeAndAspect(video, ProcessingDub, OutputAspectOriginal)
 }
 
 func (m *Manager) StartWithMode(video model.Video, mode string) (Job, error) {
+	return m.StartWithModeAndAspect(video, mode, OutputAspectOriginal)
+}
+
+func (m *Manager) StartWithModeAndAspect(video model.Video, mode, aspect string) (Job, error) {
 	if video.URL == "" || video.Platform == "" {
 		return Job{}, fmt.Errorf("platform and url are required")
 	}
 	mode, err := validateProcessingMode(mode)
+	if err != nil {
+		return Job{}, err
+	}
+	aspect, err = validateOutputAspect(aspect)
 	if err != nil {
 		return Job{}, err
 	}
@@ -160,6 +170,7 @@ func (m *Manager) StartWithMode(video model.Video, mode string) (Job, error) {
 		Status:         JobQueued,
 		Video:          video,
 		ProcessingMode: mode,
+		OutputAspect:   aspect,
 		Attempts:       1,
 		CreatedAt:      now,
 		UpdatedAt:      now,
@@ -261,6 +272,7 @@ func (m *Manager) run(id string) {
 		return
 	}
 	job.ProcessingMode = normalizeProcessingMode(job.ProcessingMode)
+	job.OutputAspect = normalizeOutputAspect(job.OutputAspect)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(envPositiveInt("JOB_TIMEOUT_MINUTES", 180))*time.Minute)
 	activeState, active := m.registerActiveJob(id, cancel)
@@ -317,9 +329,23 @@ func (m *Manager) run(id string) {
 	}
 
 	if job.ProcessingMode == ProcessingDownload {
+		finalOutput := sourceOutput
+		if job.OutputAspect != OutputAspectOriginal {
+			m.update(id, func(current *Job) {
+				current.Status = JobRendering
+				current.Error = ""
+				current.UpdatedAt = time.Now().UTC()
+			})
+			converted, err := m.applyOutputAspect(ctx, sourceOutput, job.OutputAspect)
+			if err != nil {
+				m.fail(id, JobFailed, err)
+				return
+			}
+			finalOutput = converted
+		}
 		m.update(id, func(job *Job) {
 			job.Status = JobDone
-			job.Output = sourceOutput
+			job.Output = finalOutput
 			job.Error = ""
 			job.UpdatedAt = time.Now().UTC()
 		})
@@ -353,11 +379,27 @@ func (m *Manager) run(id string) {
 		return
 	}
 
+	finalOutput := result.OutputVideo
+	if job.OutputAspect != OutputAspectOriginal {
+		m.update(id, func(current *Job) {
+			current.Status = JobRendering
+			current.Error = ""
+			current.UpdatedAt = time.Now().UTC()
+		})
+		converted, convertErr := m.applyOutputAspect(ctx, result.OutputVideo, job.OutputAspect)
+		if convertErr != nil {
+			m.fail(id, JobLocalizationFailed, convertErr)
+			return
+		}
+		finalOutput = converted
+		result.OutputVideo = converted
+	}
+
 	m.update(id, func(job *Job) {
 		job.Status = JobDone
 		job.Localization = &result
 		job.Error = ""
-		job.Output = result.OutputVideo
+		job.Output = finalOutput
 		job.UpdatedAt = time.Now().UTC()
 	})
 }
