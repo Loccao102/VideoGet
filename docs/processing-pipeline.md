@@ -48,6 +48,35 @@ Search -> Download -> Whisper -> Translate Vietnamese -> TTS
 
 This remains the legacy VideoGet behavior and is intentionally opt-in in the new UI.
 
+### `ocr_subtitles`
+
+```text
+Search -> Download
+       -> FFmpeg sampled-frame decode
+       -> RapidOCR text + bbox in one pass
+       -> Translate Vietnamese
+       -> cleanup + sub + branding + requested aspect
+       -> ONE video encode
+       -> copy original audio
+       -> Final MP4
+```
+
+The normal OCR path does not create a full-video H.264 compatibility proxy and does not run a second OCR pass just for bbox placement.
+
+### `ocr_music`
+
+```text
+Search -> Download
+       -> FFmpeg sampled-frame OCR + bbox
+       -> Translate Vietnamese
+       -> cleanup + sub + branding + requested aspect
+       -> ONE video encode
+       -> music mix with video stream copy
+       -> Final MP4
+```
+
+The temporary subbed container is removed after the music output is complete unless `OCR_KEEP_SUBBED_INTERMEDIATE=true`.
+
 ## 3. Subtitle editor and re-render
 
 A completed subtitle/dub job exposes its Vietnamese SRT through:

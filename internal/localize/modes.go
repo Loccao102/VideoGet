@@ -18,10 +18,20 @@ const (
 	ModeOCRSubtitles = "ocr_subtitles"
 )
 
-// ProcessMode keeps the persistent worker for full dubbing jobs and uses
-// dedicated one-shot scripts for modes that must never load Whisper/TTS.
+// ProcessMode keeps backwards compatibility for callers that do not request
+// an output aspect during the localization render.
 func (p *Processor) ProcessMode(ctx context.Context, input, mode string) (Result, error) {
+	return p.ProcessModeWithAspect(ctx, input, mode, "original")
+}
+
+// ProcessModeWithAspect lets OCR modes burn cleanup/subtitles and apply the final
+// social aspect in the same video encode. Non-OCR modes keep their legacy flow.
+func (p *Processor) ProcessModeWithAspect(ctx context.Context, input, mode, aspect string) (Result, error) {
 	mode = strings.ToLower(strings.TrimSpace(mode))
+	aspect = strings.ToLower(strings.TrimSpace(aspect))
+	if aspect == "" {
+		aspect = "original"
+	}
 	if mode == "" || mode == ModeDub {
 		return p.Process(ctx, input)
 	}
@@ -62,10 +72,14 @@ func (p *Processor) ProcessMode(ctx context.Context, input, mode string) (Result
 	if script == "" {
 		return Result{}, fmt.Errorf("%s script not found", label)
 	}
-	return p.processOneShotMode(ctx, input, script, label)
+	extraArgs := []string{}
+	if mode == ModeOCRSubtitles || mode == ModeOCRMusic {
+		extraArgs = append(extraArgs, "--aspect", aspect)
+	}
+	return p.processOneShotMode(ctx, input, script, label, extraArgs...)
 }
 
-func (p *Processor) processOneShotMode(ctx context.Context, input, script, label string) (Result, error) {
+func (p *Processor) processOneShotMode(ctx context.Context, input, script, label string, extraArgs ...string) (Result, error) {
 	if !p.Enabled() {
 		return Result{OutputVideo: input}, nil
 	}
@@ -94,10 +108,13 @@ func (p *Processor) processOneShotMode(ctx context.Context, input, script, label
 		return Result{}, fmt.Errorf("create localization output directory: %w", err)
 	}
 
-	cmd := exec.CommandContext(ctx, p.python, script,
+	args := []string{
+		script,
 		"--input", input,
 		"--output-dir", outputDir,
-	)
+	}
+	args = append(args, extraArgs...)
+	cmd := exec.CommandContext(ctx, p.python, args...)
 	cmd.Env = os.Environ()
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -179,6 +196,14 @@ func (p *Processor) RenderSubtitles(ctx context.Context, input, subtitle, output
 // RenderOCROverlaySubtitles reuses the OCR footprint stored in metadata and only
 // changes presentation. It never runs OCR/translation/Whisper/TTS again.
 func (p *Processor) RenderOCROverlaySubtitles(ctx context.Context, input, subtitle, metadata, output, platform, style string) error {
+	return p.RenderOCROverlaySubtitlesWithAspect(ctx, input, subtitle, metadata, output, platform, style, "original")
+}
+
+func (p *Processor) RenderOCROverlaySubtitlesWithAspect(ctx context.Context, input, subtitle, metadata, output, platform, style, aspect string) error {
+	aspect = strings.ToLower(strings.TrimSpace(aspect))
+	if aspect == "" {
+		aspect = "original"
+	}
 	if strings.TrimSpace(input) == "" || strings.TrimSpace(subtitle) == "" || strings.TrimSpace(metadata) == "" || strings.TrimSpace(output) == "" {
 		return fmt.Errorf("input, subtitle, OCR metadata and output paths are required")
 	}
@@ -219,6 +244,7 @@ func (p *Processor) RenderOCROverlaySubtitles(ctx context.Context, input, subtit
 		"--output", output,
 		"--platform", strings.TrimSpace(platform),
 		"--style", strings.TrimSpace(style),
+		"--aspect", aspect,
 	)
 	cmd.Env = os.Environ()
 	var stderr bytes.Buffer

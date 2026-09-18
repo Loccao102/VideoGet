@@ -10,14 +10,7 @@ Dùng `.env.low.example` cho máy:
 
 ## Mục tiêu
 
-Preset này ưu tiên:
-
-```text
-ổn định
-> giữ máy responsive
-> tốc độ
-> chất lượng tối đa
-```
+Preset này ưu tiên giảm concurrency và công việc thừa, **không hạ chất lượng encode OCR cuối để đổi lấy tốc độ**. OCR final dùng CRF 18; phần tiết kiệm thời gian đến từ direct decode + single-pass render.
 
 Các giới hạn chính:
 
@@ -30,8 +23,8 @@ OCR_MODEL_SIZE=tiny
 OCR_FPS=2
 OCR_MAX_SAMPLES=360
 
-OCR_DECODE_PROXY_PRESET=ultrafast
-OCR_DECODE_PROXY_THREADS=2
+OCR_RENDER_CRF=18
+OCR_KEEP_SUBBED_INTERMEDIATE=false
 
 OLLAMA_MODEL=qwen3:1.7b
 TRANSLATE_BATCH_SIZE=6
@@ -44,6 +37,7 @@ TTS_CONCURRENCY=1
 
 VIDEO_PRESET=ultrafast
 VIDEO_CRF=23
+OCR_RENDER_CRF=18
 ```
 
 ## Cài model và chạy

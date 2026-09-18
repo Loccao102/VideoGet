@@ -119,6 +119,22 @@ class OCROverlayStyleTests(unittest.TestCase):
         self.assertIn('for tight_region in source_regions', source)
 
 
+    def test_aspect_is_appended_inside_overlay_filter_graph(self) -> None:
+        filters = []
+        label, width, height, mode = overlay.append_aspect_filter(
+            filters, "subbed", 1920, 1080, "3:4"
+        )
+        self.assertEqual(label, "aspectout")
+        self.assertEqual((width, height), (1080, 1440))
+        self.assertEqual(mode, "crop")
+        self.assertTrue(any("[subbed]crop=810:1080" in value for value in filters))
+
+    def test_audio_is_stream_copied_in_ocr_subtitle_render(self) -> None:
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        self.assertIn('cmd += ["-map", "0:a:0", "-c:a", "copy"]', source)
+        self.assertIn("OCR_RENDER_CRF", source)
+
+
 class OCRDefaultRenderTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -126,7 +142,7 @@ class OCRDefaultRenderTests(unittest.TestCase):
 
     def test_initial_render_defaults_to_overlay(self) -> None:
         self.assertIn('OCR_SUBTITLE_INITIAL_RENDER_STYLE", "ocr_overlay"', self.source)
-        self.assertIn("render_ocr_overlay.render(input_path, vi_srt, metadata_path, output_video, platform)", self.source)
+        self.assertIn("render_ocr_overlay.render(input_path, vi_srt, metadata_path, output_video, platform, aspect=aspect)", self.source)
 
     def test_bilibili_can_be_inferred_from_bv_filename(self) -> None:
         self.assertIn('return "bilibili"', self.source)

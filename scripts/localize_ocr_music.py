@@ -16,6 +16,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import time
 from pathlib import Path
 
@@ -243,19 +244,112 @@ def finalize_segment(segment: dict, output: list[dict], persistent_limit: float)
     output.append(segment)
 
 
-def extract_segments(input_path: Path, output_dir: Path) -> tuple[list[dict], list[tuple[float, float, float, float]], dict]:
-    cap = cv2.VideoCapture(str(input_path))
-    if not cap.isOpened():
-        raise RuntimeError(f"cannot open video for OCR: {input_path}")
-    source_fps = float(cap.get(cv2.CAP_PROP_FPS) or 25.0)
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-    duration = total_frames / source_fps if total_frames > 0 and source_fps > 0 else 0.0
-    if width <= 0 or height <= 0 or duration <= 0:
-        cap.release()
-        raise RuntimeError("video metadata is unavailable for OCR")
+def _parse_rate(value: str | None) -> float:
+    raw = str(value or "").strip()
+    if not raw:
+        return 0.0
+    if "/" in raw:
+        left, right = raw.split("/", 1)
+        try:
+            denominator = float(right)
+            return float(left) / denominator if denominator else 0.0
+        except ValueError:
+            return 0.0
+    try:
+        return float(raw)
+    except ValueError:
+        return 0.0
 
+
+def _probe_video(input_path: Path) -> tuple[int, int, float, float]:
+    process = subprocess.run(
+        [
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=width,height,avg_frame_rate,r_frame_rate:format=duration",
+            "-of", "json", str(input_path),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if process.returncode != 0:
+        raise RuntimeError(process.stderr.strip() or "ffprobe failed for OCR")
+    payload = json.loads(process.stdout or "{}")
+    streams = payload.get("streams") or []
+    if not streams:
+        raise RuntimeError("video stream not found for OCR")
+    stream = streams[0]
+    width = int(stream.get("width") or 0)
+    height = int(stream.get("height") or 0)
+    source_fps = _parse_rate(stream.get("avg_frame_rate")) or _parse_rate(stream.get("r_frame_rate")) or 25.0
+    try:
+        duration = float((payload.get("format") or {}).get("duration") or 0.0)
+    except (TypeError, ValueError):
+        duration = 0.0
+    if width <= 0 or height <= 0 or duration <= 0:
+        raise RuntimeError("video metadata is unavailable for OCR")
+    return width, height, source_fps, duration
+
+
+def _read_exact(stream, size: int) -> bytes:
+    chunks = bytearray()
+    while len(chunks) < size:
+        chunk = stream.read(size - len(chunks))
+        if not chunk:
+            break
+        chunks.extend(chunk)
+    return bytes(chunks)
+
+
+def _expand_box(
+    region: tuple[float, float, float, float],
+    pad_x: float,
+    pad_y: float,
+) -> tuple[float, float, float, float]:
+    x, y, w, h = region
+    nx = clamp(x - pad_x, 0.0, 0.995)
+    ny = clamp(y - pad_y, 0.0, 0.995)
+    right = clamp(x + w + pad_x, nx + 0.005, 1.0)
+    bottom = clamp(y + h + pad_y, ny + 0.005, 1.0)
+    return nx, ny, right - nx, bottom - ny
+
+
+def _segment_geometry(boxes: list[tuple[float, float, float, float]]) -> tuple[list[list[float]], list[float] | None, str]:
+    if not boxes:
+        return [], None, ""
+    detail_pad_x = env_float("OCR_SEGMENT_DETAIL_PAD_X", 0.004, 0.0)
+    detail_pad_y = env_float("OCR_SEGMENT_DETAIL_PAD_Y", 0.004, 0.0)
+    max_boxes = env_int("OCR_SEGMENT_DETAIL_MAX_BOXES", 12, 1)
+    details = [
+        [round(value, 6) for value in _expand_box(box, detail_pad_x, detail_pad_y)]
+        for box in boxes[:max_boxes]
+    ]
+    left = min(box[0] for box in boxes)
+    top = min(box[1] for box in boxes)
+    right = max(box[0] + box[2] for box in boxes)
+    bottom = max(box[1] + box[3] for box in boxes)
+    union = _expand_box(
+        (left, top, max(0.001, right - left), max(0.001, bottom - top)),
+        env_float("OCR_SEGMENT_BBOX_PAD_X", 0.012, 0.0),
+        env_float("OCR_SEGMENT_BBOX_PAD_Y", 0.008, 0.0),
+    )
+    placement = "bottom" if union[1] + union[3] >= env_float("OCR_OVERLAY_BOTTOM_THRESHOLD", 0.68, 0.0) else "upper"
+    return details, [round(value, 6) for value in union], placement
+
+
+def _apply_geometry(segment: dict, boxes: list[tuple[float, float, float, float]]) -> None:
+    details, bbox, placement = _segment_geometry(boxes)
+    if bbox is None:
+        return
+    segment["bbox"] = bbox
+    segment["bboxRegions"] = details
+    segment["bboxConfidence"] = round(float(segment.get("confidence", 0.0)), 3)
+    segment["placement"] = placement
+
+
+def extract_segments(input_path: Path, output_dir: Path) -> tuple[list[dict], list[tuple[float, float, float, float]], dict]:
+    """Decode sampled frames with ffmpeg directly; never create a full-video OCR proxy."""
+    width, height, source_fps, duration = _probe_video(input_path)
     region = detect_ocr_region(input_path, output_dir, width, height)
     ocr_fps = env_float("OCR_FPS", 3.0, 0.25)
     interval = 1.0 / ocr_fps
@@ -267,50 +361,91 @@ def extract_segments(input_path: Path, output_dir: Path) -> tuple[list[dict], li
     persistent_limit = env_float("OCR_IGNORE_PERSISTENT_SEC", 12.0, 0.0)
     engine = make_ocr_engine()
 
+    frame_bytes = width * height * 3
+    cmd = [
+        "ffmpeg", "-v", "error", "-hwaccel", "none", "-i", str(input_path),
+        "-map", "0:v:0", "-an", "-sn", "-dn",
+        "-vf", f"fps={ocr_fps:g}",
+        "-pix_fmt", "bgr24", "-f", "rawvideo", "pipe:1",
+    ]
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if process.stdout is None:
+        raise RuntimeError("could not open ffmpeg OCR frame pipe")
+
     segments: list[dict] = []
     observed_boxes: list[tuple[float, float, float, float]] = []
     current: dict | None = None
     base.log(
-        f"OCR local: {ocr_fps:g} fps, PP-OCRv6/{os.getenv('OCR_MODEL_SIZE', 'small')}, "
+        f"OCR stream: ffmpeg direct decode, {ocr_fps:g} fps, "
+        f"PP-OCRv6/{os.getenv('OCR_MODEL_SIZE', 'small')}, "
         f"region={','.join(f'{value:.3f}' for value in region)}"
     )
 
-    for index in range(sample_count):
-        timestamp = min(duration, index * interval)
-        cap.set(cv2.CAP_PROP_POS_MSEC, timestamp * 1000.0)
-        ok, frame = cap.read()
-        if not ok or frame is None:
-            continue
-        text, confidence, boxes = ocr_frame(engine, frame, region, min_confidence)
-        observed_boxes.extend(boxes)
-        if not text:
-            if current is not None and timestamp - float(current["lastSeen"]) > max_gap:
-                finalize_segment(current, segments, persistent_limit)
-                current = None
-            continue
+    sampled = 0
+    try:
+        for index in range(sample_count):
+            raw = _read_exact(process.stdout, frame_bytes)
+            if not raw:
+                break
+            if len(raw) != frame_bytes:
+                raise RuntimeError(f"short ffmpeg OCR frame: {len(raw)}/{frame_bytes} bytes")
+            frame = np.frombuffer(raw, dtype=np.uint8).reshape((height, width, 3))
+            timestamp = min(duration, index * interval)
+            sampled += 1
+            text, confidence, boxes = ocr_frame(engine, frame, region, min_confidence)
+            observed_boxes.extend(boxes)
 
-        if current is not None and timestamp - float(current["lastSeen"]) <= max_gap and similarity(current["text"], text) >= similarity_threshold:
-            current["end"] = min(duration, timestamp + interval)
-            current["lastSeen"] = timestamp
-            current["observations"] = int(current.get("observations", 1)) + 1
-            if confidence > float(current.get("confidence", 0.0)):
-                current["text"] = text
-                current["confidence"] = round(confidence, 4)
-        else:
-            if current is not None:
-                finalize_segment(current, segments, persistent_limit)
-            current = {
-                "id": 0,
-                "start": timestamp,
-                "end": min(duration, timestamp + interval),
-                "lastSeen": timestamp,
-                "text": text,
-                "confidence": round(confidence, 4),
-                "observations": 1,
-            }
-    cap.release()
+            if not text:
+                if current is not None and timestamp - float(current["lastSeen"]) > max_gap:
+                    finalize_segment(current, segments, persistent_limit)
+                    current = None
+                continue
+
+            if current is not None and timestamp - float(current["lastSeen"]) <= max_gap and similarity(current["text"], text) >= similarity_threshold:
+                current["end"] = min(duration, timestamp + interval)
+                current["lastSeen"] = timestamp
+                current["observations"] = int(current.get("observations", 1)) + 1
+                if confidence > float(current.get("confidence", 0.0)):
+                    current["text"] = text
+                    current["confidence"] = round(confidence, 4)
+                    _apply_geometry(current, boxes)
+            else:
+                if current is not None:
+                    finalize_segment(current, segments, persistent_limit)
+                current = {
+                    "id": 0,
+                    "start": timestamp,
+                    "end": min(duration, timestamp + interval),
+                    "lastSeen": timestamp,
+                    "text": text,
+                    "confidence": round(confidence, 4),
+                    "observations": 1,
+                }
+                _apply_geometry(current, boxes)
+    finally:
+        if process.poll() is None:
+            process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        try:
+            process.stdout.close()
+        except Exception:
+            pass
+
     if current is not None:
         finalize_segment(current, segments, persistent_limit)
+
+    if sampled == 0:
+        stderr = ""
+        if process.stderr is not None:
+            try:
+                stderr = process.stderr.read().decode("utf-8", errors="replace")
+            except Exception:
+                stderr = ""
+        raise RuntimeError(f"ffmpeg produced no OCR frames: {stderr.strip()[:600]}")
 
     for segment in segments:
         segment.pop("lastSeen", None)
@@ -321,8 +456,10 @@ def extract_segments(input_path: Path, output_dir: Path) -> tuple[list[dict], li
         "duration": duration,
         "sourceFps": source_fps,
         "ocrFps": ocr_fps,
-        "sampleCount": sample_count,
+        "sampleCount": sampled,
         "region": region,
+        "decodeMode": "ffmpeg_pipe",
+        "segmentBBoxCount": sum(1 for segment in segments if segment.get("bbox")),
     }
     return segments, observed_boxes, info
 
@@ -425,6 +562,8 @@ def render_ocr_subtitles(
     subtitle_path: Path,
     output_path: Path,
     text_region: tuple[float, float, float, float],
+    segments: list[dict] | None = None,
+    aspect: str = "original",
 ) -> None:
     previous = {
         "VIDEO_CLEANUP_MODE": os.environ.get("VIDEO_CLEANUP_MODE"),
@@ -451,6 +590,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="OCR Chinese captions, translate to Vietnamese and add background music")
     parser.add_argument("--input", required=True)
     parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--aspect", default="original")
     args = parser.parse_args()
 
     input_path = Path(args.input).resolve()
@@ -490,18 +630,26 @@ def main() -> None:
     fallback_region = tuple(float(value) for value in video_info["region"])
     text_region = aggregate_text_region(boxes, fallback_region)
     render_started = time.perf_counter()
-    render_ocr_subtitles(input_path, vi_srt, subbed_video, text_region)
+    render_ocr_subtitles(input_path, vi_srt, subbed_video, text_region, segments, args.aspect)
     timings["render"] = round(time.perf_counter() - render_started, 3)
 
     music = choose_music(input_path)
     music_started = time.perf_counter()
     mix_music(subbed_video, music, output_video, float(video_info["duration"]))
     timings["music"] = round(time.perf_counter() - music_started, 3)
+    # subbed_video is only an intermediate container. Its video stream has already
+    # been copied into output_video, so keeping both doubles disk usage for no benefit.
+    if subbed_video != output_video and not env_bool("OCR_KEEP_SUBBED_INTERMEDIATE", False):
+        try:
+            subbed_video.unlink(missing_ok=True)
+        except OSError as error:
+            base.log(f"Could not remove OCR+Music intermediate: {error}")
     timings["total"] = round(time.perf_counter() - started, 3)
 
     metadata = {
         "input": str(input_path),
         "mode": "ocr_music",
+        "outputAspect": args.aspect.strip().lower() or "original",
         "detectedLanguage": os.getenv("OCR_SOURCE_LANGUAGE", "zh"),
         "segments": segments,
         "originalSubtitle": str(original_srt),

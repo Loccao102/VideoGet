@@ -8,7 +8,7 @@ VideoGet có 3 preset phần cứng rõ ràng. Mục tiêu của các preset là
 
 | Tier | File | CPU logical threads | RAM | GPU | Storage | OCR | Ollama | Localization | Render |
 |---|---|---:|---:|---|---|---|---|---:|---|
-| **Yếu** | `.env.low.example` | 4-8 | 8-16 GB | Không cần | SSD nên có | `tiny`, 1.5 FPS | `qwen3:1.7b` | 1 | `ultrafast`, CRF 23 |
+| **Yếu** | `.env.low.example` | 4-8 | 8-16 GB | Không cần | SSD nên có | `tiny`, 2 FPS | `qwen3:1.7b` | 1 | OCR single-pass, CRF 18 |
 | **Vừa** | `.env.medium.example` | 8-16 | 16-32 GB | Optional | SSD/NVMe | `small`, 3 FPS | `qwen3:4b` | 1 | `veryfast`, CRF 21 |
 | **Cao** | `.env.high.example` | 20-32+ | 32-64+ GB | Không bắt buộc; hữu ích cho Ollama | NVMe khuyến nghị | `medium`, 4 FPS | `qwen3:8b` | 2 | `fast`, CRF 20 |
 
@@ -287,58 +287,35 @@ Job cũ chưa có `bboxRegions` vẫn fallback về union bbox cũ. Muốn job c
 
 ---
 
-# 6. AV1 compatibility proxy
+# 6. AV1 direct decode cho OCR
 
-Một số video AV1 không decode ổn định bằng OpenCV. Khi đó VideoGet có thể tạo proxy H.264 tạm trước OCR.
+Bilibili thường trả video AV1: file nguồn có thể rất nhỏ nhưng nếu transcode toàn bộ sang H.264 chỉ để OpenCV đọc thì file tạm có thể phình nhiều lần.
 
-## `OCR_DECODE_PROXY_PRESET`
-
-Preset FFmpeg/libx264 cho proxy:
+Pipeline mới **không tạo full-video OCR proxy** nữa. FFmpeg decode source trực tiếp và pipe các frame đã sample sang OCR:
 
 ```text
-ultrafast → nhanh, file proxy lớn hơn
-veryfast  → cân bằng
-fast      → chậm hơn
+AV1/H.264 source
+  -> ffmpeg decode
+  -> fps sampler
+  -> raw BGR frame pipe
+  -> RapidOCR
 ```
 
-Low dùng `ultrafast`; Medium/High dùng `veryfast`.
+Frame OCR giữ nguyên độ phân giải source. Vì vậy tối ưu này giảm encode trung gian và I/O đĩa, không đổi resolution/fps của final và cũng không downscale frame OCR.
 
-## `OCR_DECODE_PROXY_THREADS`
+Trong cùng pass OCR, VideoGet giữ luôn:
 
-Số CPU threads dành cho proxy.
-
-- Low: 2
-- Medium: 4
-- High: 0 = FFmpeg tự quyết định.
-
-Nếu AV1 proxy làm máy 100% CPU, đây là biến cần giảm.
-
-## `OCR_DECODE_PROXY_CRF`
-
-Chất lượng proxy tạm.
-
-- Số thấp hơn = nét hơn/file lớn hơn.
-- Số cao hơn = nhẹ hơn/file nhỏ hơn.
-
-Proxy chỉ phục vụ OCR nên không cần chất lượng như final video.
-
-## Proxy nhẹ cho Low
-
-Nguồn Bilibili AV1 có thể chỉ 15-25 MB nhưng nếu transcode nguyên 1080p/30fps sang H.264 `ultrafast` thì proxy tạm có thể phình lên 50-100 MB. Low giờ không làm vậy nữa:
-
-```env
-OCR_DECODE_PROXY_MAX_WIDTH=960
-OCR_DECODE_PROXY_FPS=8
-OCR_DECODE_PROXY_CRF=30
-OCR_DECODE_PROXY_THREADS=4
-OCR_SEGMENT_BBOX_SAMPLES=2
+```text
+text
+timestamp
+bbox
+bboxRegions
 ```
 
-Proxy này chỉ phục vụ OCR/bbox. Final render vẫn dùng video gốc, nên việc giảm proxy xuống 960px/8fps không hạ độ phân giải hay fps của output cuối. BBox dùng tọa độ normalized nên vẫn map chính xác về source.
+nên không cần một lượt OCR thứ hai chỉ để tìm bbox.
 
-Bilibili branding cũng tái sử dụng chính OCR-compatible input trước khi proxy bị xóa, tránh tạo thêm một proxy H.264 riêng chỉ để dò uploader mark.
+Các biến `OCR_DECODE_PROXY_*` cũ có thể còn trong file `.env` local sau khi upgrade nhưng không còn nằm trên đường chạy OCR chính; có thể bỏ chúng.
 
----
 
 # 7. Ollama / Translation
 
@@ -494,7 +471,7 @@ Tăng lên `0.50-0.60` nếu muốn bảo thủ hơn và ưu tiên giữ toàn b
 
 ## `ASPECT_OUTPUT_CRF`
 
-Mặc định `18` ở Balanced/High để derivative social hạn chế suy giảm chất lượng sau một lần encode thêm. Low dùng `23` để giảm thời gian encode, bitrate và dung lượng file. `ASPECT_OUTPUT_PRESET` để trống sẽ kế thừa `VIDEO_PRESET` của tier hiện tại.
+Mode không phải OCR vẫn dùng `ASPECT_OUTPUT_CRF=18` cho derivative. OCR job không cần lượt encode aspect riêng: cleanup + sub + branding + aspect được gộp vào một pass và dùng `OCR_RENDER_CRF=18` ở cả Low/Medium/High.
 
 ## Target resolution
 
@@ -510,6 +487,19 @@ Nếu source đã đúng tỉ lệ target, VideoGet copy file thay vì re-encode
 ---
 
 # 11. Final render
+
+## `OCR_RENDER_CRF`
+
+OCR mode dùng một encode cuối duy nhất cho cleanup + sub + branding + aspect:
+
+```env
+OCR_RENDER_CRF=18
+```
+
+Giá trị này cố ý giống nhau giữa các preset. Tier Low giảm concurrency/model workload và bỏ encode thừa, **không tăng CRF của video OCR final**.
+
+`OCR_RENDER_PRESET` để trống sẽ kế thừa `VIDEO_PRESET`. Preset encoder ảnh hưởng tốc độ/nén file; CRF 18 giữ target chất lượng hình.
+
 
 ## `VIDEO_PRESET`
 
@@ -616,7 +606,7 @@ VIDEO_PRESET=ultrafast
 
 ## Video AV1 chậm bất thường
 
-Kiểm tra log có dòng compatibility proxy. Nếu có, bottleneck là AV1 → H.264 proxy và `OCR_DECODE_PROXY_*` sẽ quan trọng.
+OCR giờ decode AV1 trực tiếp qua FFmpeg pipe nên không còn full-video H.264 compatibility proxy. Nếu stage OCR vẫn chậm, bottleneck là software AV1 decode + RapidOCR; xem timing OCR và CPU usage thay vì dung lượng proxy.
 
 ---
 

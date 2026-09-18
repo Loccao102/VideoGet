@@ -2,6 +2,7 @@ package download
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -112,6 +113,38 @@ func completedAspectBase(job Job) string {
 	return ""
 }
 
+func isOCRProcessingMode(mode string) bool {
+	return mode == ProcessingOCRSubtitles || mode == ProcessingOCRMusic
+}
+
+func ocrAspectVariantPath(job Job, aspect string) string {
+	outputDir := filepath.Join(filepath.Dir(job.SourceOutput), "localized")
+	stem := strings.TrimSuffix(filepath.Base(job.SourceOutput), filepath.Ext(job.SourceOutput))
+	kind := "ocr-subtitles"
+	if job.ProcessingMode == ProcessingOCRMusic {
+		kind = "ocr-music"
+	}
+	return filepath.Join(outputDir, fmt.Sprintf("%s.%s.aspect-%s.mp4", stem, kind, aspectSuffix(aspect)))
+}
+
+func ocrOverlayStyleFromMetadata(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "clean"
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return "clean"
+	}
+	style := strings.ToLower(strings.TrimSpace(fmt.Sprint(payload["lastOverlayStyle"])))
+	switch style {
+	case "clean", "capsule", "box":
+		return style
+	default:
+		return "clean"
+	}
+}
+
 // RenderAspectVariant creates another aspect-ratio version from an already
 // completed job without rerunning OCR, translation, subtitles or TTS.
 func (m *Manager) RenderAspectVariant(id, aspect string) (Job, error) {
@@ -127,14 +160,34 @@ func (m *Manager) RenderAspectVariant(id, aspect string) (Job, error) {
 	if job.Status != JobDone {
 		return Job{}, fmt.Errorf("job must be complete before rendering another aspect ratio")
 	}
-	base := completedAspectBase(job)
-	if base == "" {
-		return Job{}, fmt.Errorf("completed rendered video is unavailable")
-	}
 	if existing := strings.TrimSpace(job.AspectOutputs[aspect]); existing != "" && reusableMedia(existing) {
 		return job, nil
 	}
 
+	if isOCRProcessingMode(job.ProcessingMode) {
+		if !reusableMedia(job.SourceOutput) {
+			return Job{}, fmt.Errorf("downloaded source video is unavailable")
+		}
+		if _, err := editableSubtitlePath(job); err != nil {
+			return Job{}, err
+		}
+		if _, err := ocrMetadataPath(job); err != nil {
+			return Job{}, err
+		}
+		m.update(id, func(current *Job) {
+			current.Status = JobAspectRendering
+			current.Error = ""
+			current.UpdatedAt = time.Now().UTC()
+		})
+		updated, _ := m.Get(id)
+		go m.runOCRAspectVariant(id, aspect)
+		return updated, nil
+	}
+
+	base := completedAspectBase(job)
+	if base == "" {
+		return Job{}, fmt.Errorf("completed rendered video is unavailable")
+	}
 	m.update(id, func(current *Job) {
 		current.Status = JobAspectRendering
 		current.Error = ""
@@ -143,6 +196,82 @@ func (m *Manager) RenderAspectVariant(id, aspect string) (Job, error) {
 	updated, _ := m.Get(id)
 	go m.runAspectVariant(id, aspect, base)
 	return updated, nil
+}
+
+func (m *Manager) runOCRAspectVariant(id, aspect string) {
+	job, ok := m.Get(id)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		time.Duration(envPositiveInt("JOB_TIMEOUT_MINUTES", 180))*time.Minute,
+	)
+	activeState, active := m.registerActiveJob(id, cancel)
+	if !active {
+		cancel()
+		return
+	}
+	defer func() {
+		cancel()
+		m.unregisterActiveJob(id, activeState)
+	}()
+
+	subtitle, err := editableSubtitlePath(job)
+	if err != nil {
+		m.update(id, func(current *Job) {
+			current.Status = JobDone
+			current.Error = fmt.Sprintf("aspect %s render failed: %v", aspect, err)
+			current.UpdatedAt = time.Now().UTC()
+		})
+		return
+	}
+	metadata, err := ocrMetadataPath(job)
+	if err != nil {
+		m.update(id, func(current *Job) {
+			current.Status = JobDone
+			current.Error = fmt.Sprintf("aspect %s render failed: %v", aspect, err)
+			current.UpdatedAt = time.Now().UTC()
+		})
+		return
+	}
+	output := ocrAspectVariantPath(job, aspect)
+	if job.ProcessingMode == ProcessingOCRMusic {
+		err = m.localizer.RenderOCRMusicSubtitlesWithAspect(
+			ctx, job.SourceOutput, subtitle, output, aspect,
+		)
+	} else {
+		style := ocrOverlayStyleFromMetadata(metadata)
+		err = m.localizer.RenderOCROverlaySubtitlesWithAspect(
+			ctx, job.SourceOutput, subtitle, metadata, output, job.Video.Platform, style, aspect,
+		)
+	}
+	if err != nil {
+		m.update(id, func(current *Job) {
+			current.Status = JobDone
+			current.Error = fmt.Sprintf("aspect %s render failed: %v", aspect, err)
+			current.UpdatedAt = time.Now().UTC()
+		})
+		return
+	}
+	if info, statErr := os.Stat(output); statErr != nil || info.IsDir() || info.Size() <= 0 {
+		m.update(id, func(current *Job) {
+			current.Status = JobDone
+			current.Error = fmt.Sprintf("aspect %s render produced no usable video", aspect)
+			current.UpdatedAt = time.Now().UTC()
+		})
+		return
+	}
+
+	m.update(id, func(current *Job) {
+		current.Status = JobDone
+		current.Error = ""
+		if current.AspectOutputs == nil {
+			current.AspectOutputs = map[string]string{}
+		}
+		current.AspectOutputs[aspect] = output
+		current.UpdatedAt = time.Now().UTC()
+	})
 }
 
 func (m *Manager) runAspectVariant(id, aspect, base string) {
