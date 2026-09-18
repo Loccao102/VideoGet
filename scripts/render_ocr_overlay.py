@@ -130,10 +130,19 @@ def metadata_segments(metadata: dict) -> list[dict]:
             continue
         if end <= start:
             continue
+        detail_regions = []
+        for detail in raw.get("bboxRegions") or []:
+            try:
+                detail_regions.append(normalize_region(detail, pad=False))
+            except (TypeError, ValueError):
+                continue
         out.append({
             "start": start,
             "end": end,
-            "bbox": normalize_region(raw.get("bbox")),
+            # bbox from ocr_segment_regions is already padded for placement.
+            # Do not expand it a second time here.
+            "bbox": normalize_region(raw.get("bbox"), pad=False),
+            "regions": detail_regions,
             "placement": str(raw.get("placement", "")).strip().lower(),
             "confidence": float(raw.get("bboxConfidence", 0.0) or 0.0),
         })
@@ -171,12 +180,14 @@ def attach_regions(entries: list[dict], metadata: dict, fallback_region: tuple[f
 
         if best is not None:
             source_region = best["bbox"]
+            source_regions = best.get("regions") or [source_region]
             placement = best.get("placement", "")
             entry["bboxMatched"] = True
             entry["bboxConfidence"] = best.get("confidence", 0.0)
             matched += 1
         else:
             source_region = fallback_region
+            source_regions = [source_region]
             placement = ""
             entry["bboxMatched"] = False
             entry["bboxConfidence"] = 0.0
@@ -186,6 +197,7 @@ def attach_regions(entries: list[dict], metadata: dict, fallback_region: tuple[f
         else:
             is_bottom = source_region[1] + source_region[3] >= threshold
         entry["sourceRegion"] = source_region
+        entry["sourceRegions"] = source_regions
         entry["bottom"] = is_bottom
         entry["region"] = expand_min_region(source_region, min_bottom_width, min_bottom_height) if is_bottom else source_region
     return matched
@@ -297,7 +309,8 @@ def render(
     brand_regions, brand_side, brand_detection = resolve_bilibili_brand(input_path, metadata, platform)
     video_label, cleanup_index = add_bilibili_cleanup(filters, video_label, cleanup_index, brand_regions)
 
-    source_blur = smart.env_int("OCR_OVERLAY_SOURCE_BLUR", 12, 2)
+    source_blur = smart.env_int("OCR_OVERLAY_SOURCE_BLUR", 14, 2)
+    source_blur_power = smart.env_int("OCR_OVERLAY_SOURCE_BLUR_POWER", 3, 1)
     capsule_alpha = clamp(smart.env_float("OCR_OVERLAY_CAPSULE_ALPHA", 0.24, 0.0), 0.0, 1.0)
     box_alpha = clamp(smart.env_float("OCR_OVERLAY_BOTTOM_BOX_ALPHA", 0.88, 0.0), 0.0, 1.0)
     max_segments = smart.env_int("OCR_OVERLAY_MAX_SEGMENTS", 240, 10)
@@ -306,6 +319,10 @@ def render(
         x, y, w, h = entry["region"]
         source_x, source_y, source_w, source_h = entry.get("sourceRegion", entry["region"])
         source_region = {"x": source_x, "y": source_y, "w": source_w, "h": source_h, "confidence": 1.0}
+        source_regions = []
+        for raw_region in entry.get("sourceRegions") or [entry.get("sourceRegion", entry["region"])]:
+            rx, ry, rw, rh = raw_region
+            source_regions.append({"x": rx, "y": ry, "w": rw, "h": rh, "confidence": 1.0})
         enable = f"between(t,{float(entry['start']):.3f},{float(entry['end']):.3f})"
 
         if render_style == "box" and entry.get("bottom"):
@@ -319,8 +336,19 @@ def render(
         else:
             # Clean and capsule always remove the original characters first. Box mode
             # does the same for upper/middle captions; only lower box mode fully covers.
-            video_label = smart.add_blur_region(filters, video_label, cleanup_index, source_region, source_blur, enable)
-            cleanup_index += 1
+            # Prefer the tight OCR line/word regions. Older metadata falls back
+            # to the single union bbox, but new jobs no longer blur one oversized block.
+            for tight_region in source_regions:
+                video_label = smart.add_blur_region(
+                    filters,
+                    video_label,
+                    cleanup_index,
+                    tight_region,
+                    source_blur,
+                    enable,
+                    source_blur_power,
+                )
+                cleanup_index += 1
 
             if render_style == "capsule":
                 out = f"ocrcapsule{cleanup_index}"
@@ -379,7 +407,8 @@ def render(
         metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
     base.log(
         f"OCR overlay render: style={render_style}, platform={platform or 'unknown'}, "
-        f"segment bbox matched={matched}/{len(entries)}, brandSide={brand_side or 'none'}, "
+        f"segment bbox matched={matched}/{len(entries)}, sourceBlur={source_blur}x{source_blur_power}, "
+        f"brandSide={brand_side or 'none'}, "
         f"brandDetect={(brand_detection or {}).get('source', 'none')}"
     )
     base.run(cmd)

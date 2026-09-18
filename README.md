@@ -84,6 +84,8 @@ transcript cache hit
 ### Final render
 - Giữ file `.srt` để chỉnh sửa/re-render.
 - Tạo `*.vi-dubbed.mp4` đã burn subtitle Việt trực tiếp vào video.
+- OCR cleanup lưu bbox nhỏ theo từng detection/dòng chữ và blur riêng từng bbox; không còn bắt buộc gom cả caption thành một khung blur lớn.
+- Blur nguồn dùng multi-pass mạnh hơn để phá nét chữ sâu hơn nhưng giữ vùng ảnh bị tác động nhỏ.
 - Có thể blur vùng subtitle nguồn đã burn sẵn và các vùng watermark/logo cấu hình.
 - Color-grade nhẹ trước khi export.
 - Mix voice Việt với audio gốc ở mức âm lượng cấu hình.

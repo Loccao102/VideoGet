@@ -46,8 +46,28 @@ class OCRSegmentRegionTests(unittest.TestCase):
         self.assertNotEqual(entries[0]["region"], entries[1]["region"])
         self.assertTrue(entries[0]["bboxMatched"])
         self.assertGreaterEqual(entries[0]["region"][2], 0.24)
-        self.assertEqual(entries[0]["sourceRegion"][0:2], overlay.normalize_region([0.42, 0.82, 0.16, 0.04])[0:2])
+        self.assertEqual(entries[0]["sourceRegion"], (0.42, 0.82, 0.16, 0.04))
         self.assertEqual(entries[1]["region"], entries[1]["sourceRegion"])
+
+    def test_detail_regions_are_kept_separate_for_source_blur(self) -> None:
+        entries = [{"start": 0.0, "end": 2.0, "text": "A"}]
+        metadata = {
+            "segments": [{
+                "start": 0.0,
+                "end": 2.0,
+                "bbox": [0.20, 0.78, 0.60, 0.08],
+                "bboxRegions": [
+                    [0.22, 0.79, 0.20, 0.04],
+                    [0.55, 0.79, 0.18, 0.04],
+                ],
+                "placement": "bottom",
+            }]
+        }
+        matched = overlay.attach_regions(entries, metadata, (0.05, 0.70, 0.90, 0.20))
+        self.assertEqual(matched, 1)
+        self.assertEqual(len(entries[0]["sourceRegions"]), 2)
+        self.assertEqual(entries[0]["sourceRegions"][0], (0.22, 0.79, 0.20, 0.04))
+        self.assertLess(entries[0]["sourceRegions"][0][2], entries[0]["sourceRegion"][2])
 
     def test_nearby_retimed_entry_can_reuse_bbox(self) -> None:
         entries = [{"start": 2.1, "end": 2.8, "text": "edited"}]
@@ -94,6 +114,9 @@ class OCROverlayStyleTests(unittest.TestCase):
         self.assertIn('render_style == "box" and entry.get("bottom")', source)
         self.assertIn('if render_style == "capsule"', source)
         self.assertIn('OCR_OVERLAY_CLEAN_OUTLINE', source)
+        self.assertIn('entry.get("sourceRegions")', source)
+        self.assertIn('OCR_OVERLAY_SOURCE_BLUR_POWER', source)
+        self.assertIn('for tight_region in source_regions', source)
 
 
 class OCRDefaultRenderTests(unittest.TestCase):

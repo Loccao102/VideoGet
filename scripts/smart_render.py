@@ -248,6 +248,7 @@ def add_blur_region(
     region: dict,
     radius: int,
     enable: str = "",
+    power: int = 1,
 ) -> str:
     x, y, w, h = region["x"], region["y"], region["w"], region["h"]
     base_label, crop_label = f"cleanbase{index}", f"cleancrop{index}"
@@ -255,8 +256,8 @@ def add_blur_region(
     filters.append(f"[{input_label}]split=2[{base_label}][{crop_label}]")
     filters.append(
         f"[{crop_label}]crop=w=iw*{w:.5f}:h=ih*{h:.5f}:x=iw*{x:.5f}:y=ih*{y:.5f},"
-        f"boxblur=luma_radius={radius}:luma_power=1:"
-        f"chroma_radius={max(1, radius // 2)}:chroma_power=1[{blur_label}]"
+        f"boxblur=luma_radius={radius}:luma_power={max(1, int(power))}:"
+        f"chroma_radius={max(1, radius // 2)}:chroma_power={max(1, int(power))}[{blur_label}]"
     )
     enable_opt = f":enable='{enable}'" if enable else ""
     filters.append(
