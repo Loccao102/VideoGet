@@ -84,6 +84,8 @@ transcript cache hit
 ### Final render
 - Giữ file `.srt` để chỉnh sửa/re-render.
 - Tạo `*.vi-dubbed.mp4` đã burn subtitle Việt trực tiếp vào video.
+- OCR job hoàn tất có action **Xóa sub nguồn + chèn Việt**: dùng bbox OCR theo thời gian, FFmpeg decode source (kể cả AV1), OpenCV TELEA inpaint vùng chữ rồi mới burn subtitle Việt. Không OCR/dịch lại.
+- Inpaint hiện là CPU-first/experimental; nếu bước này lỗi, renderer tự fallback về blur để job vẫn hoàn thành.
 - Có thể blur vùng subtitle nguồn đã burn sẵn và các vùng watermark/logo cấu hình.
 - Color-grade nhẹ trước khi export.
 - Mix voice Việt với audio gốc ở mức âm lượng cấu hình.
@@ -402,6 +404,9 @@ downloads/
 | `TTS_RATE` | `+8%` | tốc độ TTS |
 | `VIDEO_CLEANUP` | `true` | cleanup trước final render |
 | `BURN_SUBTITLES` | `true` | hard-sub tiếng Việt |
+| `OCR_SUBTITLE_INITIAL_RENDER_STYLE` | `ocr_overlay` | `ocr_overlay` an toàn; đổi sang `ocr_inpaint` để job OCR mới thử xóa hard-sub trước |
+| `OCR_INPAINT_MASK_MODE` | `strokes` | mask nét chữ trong bbox OCR; có thể ép `box` để xóa mạnh hơn |
+| `OCR_INPAINT_TEMP_CRF` | `14` | chất lượng intermediate sau inpaint trước khi burn sub Việt |
 | `ASPECT_CONVERT_MODE` | `auto` | auto crop hoặc blur-fill cho tỉ lệ output |
 | `ASPECT_CROP_MIN_RETAIN` | `0.40` | ngưỡng phần khung cần giữ để cho phép crop |
 | `ASPECT_OUTPUT_CRF` | `18` | chất lượng encode derivative social |
