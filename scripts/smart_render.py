@@ -241,6 +241,25 @@ def timeline_enable(intervals: list[tuple[float, float]]) -> str:
     )
 
 
+def bounded_blur_radius(
+    region: dict,
+    requested: int,
+    frame_width: int = 0,
+    frame_height: int = 0,
+) -> int:
+    """Clamp boxblur radius to FFmpeg's per-plane limit for a cropped region."""
+    radius = max(1, int(requested))
+    if frame_width <= 0 or frame_height <= 0:
+        return radius
+    region_w = max(2, int(round(float(region.get("w", 0.0)) * frame_width)))
+    region_h = max(2, int(round(float(region.get("h", 0.0)) * frame_height)))
+    # boxblur requires radius <= min(width, height) / 2. Tight OCR boxes
+    # can be only ~20px high, so a globally configured radius like 14 may
+    # be invalid even though it is fine for larger cleanup regions.
+    maximum = max(1, min(region_w, region_h) // 2)
+    return min(radius, maximum)
+
+
 def add_blur_region(
     filters: list[str],
     input_label: str,
@@ -249,15 +268,18 @@ def add_blur_region(
     radius: int,
     enable: str = "",
     power: int = 1,
+    frame_width: int = 0,
+    frame_height: int = 0,
 ) -> str:
     x, y, w, h = region["x"], region["y"], region["w"], region["h"]
+    safe_radius = bounded_blur_radius(region, radius, frame_width, frame_height)
     base_label, crop_label = f"cleanbase{index}", f"cleancrop{index}"
     blur_label, output_label = f"cleanblur{index}", f"cleanout{index}"
     filters.append(f"[{input_label}]split=2[{base_label}][{crop_label}]")
     filters.append(
         f"[{crop_label}]crop=w=iw*{w:.5f}:h=ih*{h:.5f}:x=iw*{x:.5f}:y=ih*{y:.5f},"
-        f"boxblur=luma_radius={radius}:luma_power={max(1, int(power))}:"
-        f"chroma_radius={max(1, radius // 2)}:chroma_power={max(1, int(power))}[{blur_label}]"
+        f"boxblur=luma_radius={safe_radius}:luma_power={max(1, int(power))}:"
+        f"chroma_radius={max(1, safe_radius // 2)}:chroma_power={max(1, int(power))}[{blur_label}]"
     )
     enable_opt = f":enable='{enable}'" if enable else ""
     filters.append(
