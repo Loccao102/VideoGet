@@ -44,7 +44,7 @@ func (m *Manager) SaveSubtitle(id, content string) (Job, error) {
 	if !ok {
 		return Job{}, fmt.Errorf("job not found")
 	}
-	if job.Status == JobQueued || job.Status == JobDownloading || job.Status == JobLocalizing || job.Status == JobRendering {
+	if job.Status == JobQueued || job.Status == JobDownloading || job.Status == JobLocalizing || job.Status == JobRendering || job.Status == JobAspectRendering {
 		return Job{}, fmt.Errorf("job is currently running")
 	}
 	path, err := editableSubtitlePath(job)
@@ -90,7 +90,7 @@ func (m *Manager) ReprocessOCR(id string) (Job, error) {
 	if !ok {
 		return Job{}, fmt.Errorf("job not found")
 	}
-	if job.Status == JobQueued || job.Status == JobDownloading || job.Status == JobLocalizing || job.Status == JobRendering {
+	if job.Status == JobQueued || job.Status == JobDownloading || job.Status == JobLocalizing || job.Status == JobRendering || job.Status == JobAspectRendering {
 		return Job{}, fmt.Errorf("job is currently running")
 	}
 	if job.ProcessingMode != ProcessingOCRSubtitles && job.ProcessingMode != ProcessingOCRMusic {
@@ -148,7 +148,7 @@ func (m *Manager) RerenderSubtitlesWithStyle(id, style string) (Job, error) {
 	if !ok {
 		return Job{}, fmt.Errorf("job not found")
 	}
-	if job.Status == JobQueued || job.Status == JobDownloading || job.Status == JobLocalizing || job.Status == JobRendering {
+	if job.Status == JobQueued || job.Status == JobDownloading || job.Status == JobLocalizing || job.Status == JobRendering || job.Status == JobAspectRendering {
 		return Job{}, fmt.Errorf("job is currently running")
 	}
 	if !reusableMedia(job.SourceOutput) {
