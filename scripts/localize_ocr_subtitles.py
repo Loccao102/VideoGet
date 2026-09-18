@@ -156,6 +156,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="OCR source captions, translate to Vietnamese, keep original audio")
     parser.add_argument("--input", required=True)
     parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--aspect", default="original")
     args = parser.parse_args()
 
     input_path = Path(args.input).resolve()
@@ -167,7 +168,9 @@ def main() -> None:
     stem = input_path.stem
     original_srt = output_dir / f"{stem}.ocr.original.srt"
     vi_srt = output_dir / f"{stem}.ocr.vi.srt"
-    output_video = output_dir / f"{stem}.ocr-vi-subbed.mp4"
+    aspect = args.aspect.strip().lower() or "original"
+    aspect_suffix = "" if aspect == "original" else ".aspect-" + aspect.replace(":", "x")
+    output_video = output_dir / f"{stem}.ocr-vi-subbed{aspect_suffix}.mp4"
     metadata_path = output_dir / f"{stem}.ocr-subtitles.json"
     timings: dict[str, float] = {
         "transcribe": 0.0,
@@ -179,97 +182,70 @@ def main() -> None:
     }
     started = time.perf_counter()
 
-    proxy_started = time.perf_counter()
-    ocr_input, proxy_used, source_codec = prepare_ocr_input(input_path, output_dir)
-    timings["decodeProxy"] = round(time.perf_counter() - proxy_started, 3) if proxy_used else 0.0
-
+    source_codec = video_codec(input_path)
+    proxy_used = False
     bbox_attached = 0
     platform = infer_platform(input_path)
     brand_detection = None
-    try:
-        ocr_started = time.perf_counter()
-        segments, boxes, video_info = ocr.extract_segments(ocr_input, output_dir)
 
-        # Auto-layout can occasionally miss the real burned-caption band, especially
-        # on AV1 sources where OCR works from a temporary H.264 proxy. If the first
-        # automatic pass produces no timed segments, make one conservative recovery
-        # pass with a wider ROI and slightly lower OCR confidence. Manual ROI users
-        # keep full control and are never silently overridden.
-        original_region = os.getenv("OCR_SUBTITLE_REGION", "auto").strip()
-        if (
-            not segments
-            and ocr.env_bool("OCR_RETRY_ON_EMPTY", True)
-            and original_region.lower() in {"", "auto"}
-        ):
-            retry_region = os.getenv(
-                "OCR_RETRY_REGION", "0.02,0.20,0.96,0.78"
-            ).strip() or "0.02,0.20,0.96,0.78"
-            current_confidence = ocr.env_float("OCR_MIN_CONFIDENCE", 0.65, 0.0)
-            retry_confidence = min(
-                current_confidence,
-                ocr.env_float(
-                    "OCR_RETRY_MIN_CONFIDENCE",
-                    max(0.50, current_confidence - 0.08),
-                    0.0,
-                ),
-            )
-            previous_region_env = os.environ.get("OCR_SUBTITLE_REGION")
-            previous_confidence_env = os.environ.get("OCR_MIN_CONFIDENCE")
-            base.log(
-                "OCR first pass found 0 timed segments; retrying once with "
-                f"region={retry_region}, minConfidence={retry_confidence:.2f}"
-            )
-            try:
-                os.environ["OCR_SUBTITLE_REGION"] = retry_region
-                os.environ["OCR_MIN_CONFIDENCE"] = f"{retry_confidence:.4f}"
-                segments, boxes, video_info = ocr.extract_segments(
-                    ocr_input, output_dir
-                )
-            finally:
-                if previous_region_env is None:
-                    os.environ.pop("OCR_SUBTITLE_REGION", None)
-                else:
-                    os.environ["OCR_SUBTITLE_REGION"] = previous_region_env
-                if previous_confidence_env is None:
-                    os.environ.pop("OCR_MIN_CONFIDENCE", None)
-                else:
-                    os.environ["OCR_MIN_CONFIDENCE"] = previous_confidence_env
+    ocr_started = time.perf_counter()
+    segments, boxes, video_info = ocr.extract_segments(input_path, output_dir)
 
-        timings["ocr"] = round(time.perf_counter() - ocr_started, 3)
+    # Auto-layout can occasionally miss the real burned-caption band. If the
+    # first automatic pass produces no timed segments, make one conservative
+    # recovery pass with a wider ROI and slightly lower confidence.
+    original_region = os.getenv("OCR_SUBTITLE_REGION", "auto").strip()
+    if (
+        not segments
+        and ocr.env_bool("OCR_RETRY_ON_EMPTY", True)
+        and original_region.lower() in {"", "auto"}
+    ):
+        retry_region = os.getenv(
+            "OCR_RETRY_REGION", "0.02,0.20,0.96,0.78"
+        ).strip() or "0.02,0.20,0.96,0.78"
+        current_confidence = ocr.env_float("OCR_MIN_CONFIDENCE", 0.65, 0.0)
+        retry_confidence = min(
+            current_confidence,
+            ocr.env_float(
+                "OCR_RETRY_MIN_CONFIDENCE",
+                max(0.50, current_confidence - 0.08),
+                0.0,
+            ),
+        )
+        previous_region_env = os.environ.get("OCR_SUBTITLE_REGION")
+        previous_confidence_env = os.environ.get("OCR_MIN_CONFIDENCE")
+        base.log(
+            "OCR first pass found 0 timed segments; retrying once with "
+            f"region={retry_region}, minConfidence={retry_confidence:.2f}"
+        )
+        try:
+            os.environ["OCR_SUBTITLE_REGION"] = retry_region
+            os.environ["OCR_MIN_CONFIDENCE"] = f"{retry_confidence:.4f}"
+            segments, boxes, video_info = ocr.extract_segments(input_path, output_dir)
+        finally:
+            if previous_region_env is None:
+                os.environ.pop("OCR_SUBTITLE_REGION", None)
+            else:
+                os.environ["OCR_SUBTITLE_REGION"] = previous_region_env
+            if previous_confidence_env is None:
+                os.environ.pop("OCR_MIN_CONFIDENCE", None)
+            else:
+                os.environ["OCR_MIN_CONFIDENCE"] = previous_confidence_env
 
-        if segments:
-            bbox_started = time.perf_counter()
-            try:
-                bbox_attached = ocr_segment_regions.attach_segment_bboxes(
-                    ocr_input, segments, video_info
-                )
-            except Exception as error:
-                base.log(f"OCR segment bbox unavailable; global region fallback will be used: {error}")
-            timings["bbox"] = round(time.perf_counter() - bbox_started, 3)
+    timings["ocr"] = round(time.perf_counter() - ocr_started, 3)
+    bbox_attached = sum(1 for segment in segments if segment.get("bbox"))
+    # bbox geometry is captured during the same OCR pass; no second OCR seek pass.
+    timings["bbox"] = 0.0
 
-        # Reuse the OCR-compatible proxy for Bilibili uploader detection while it
-        # still exists. Otherwise render_ocr_overlay would need another AV1->H.264
-        # compatibility transcode just to inspect a few top-band frames.
-        if (
-            platform == "bilibili"
-            and ocr.env_bool("OCR_OVERLAY_HIDE_BILIBILI", True)
-            and ocr.env_bool("OCR_OVERLAY_BILIBILI_AUTO_DETECT", True)
-        ):
-            try:
-                brand_detection = bilibili_brand.detect(ocr_input)
-                if brand_detection:
-                    base.log("Bilibili brand detection reused OCR-compatible input")
-            except Exception as error:
-                base.log(f"Bilibili brand detection during OCR skipped: {error}")
-    finally:
-        if proxy_used and ocr_input != input_path and not ocr.env_bool("OCR_KEEP_DECODE_PROXY", False):
-            try:
-                proxy_size = ocr_input.stat().st_size if ocr_input.exists() else 0
-                ocr_input.unlink(missing_ok=True)
-                if proxy_size > 0:
-                    base.log(f"OCR proxy removed: {proxy_size / (1024 * 1024):.1f} MiB temporary file")
-            except OSError as error:
-                base.log(f"Could not remove OCR decode proxy: {error}")
+    if (
+        platform == "bilibili"
+        and ocr.env_bool("OCR_OVERLAY_HIDE_BILIBILI", True)
+        and ocr.env_bool("OCR_OVERLAY_BILIBILI_AUTO_DETECT", True)
+    ):
+        try:
+            brand_detection = bilibili_brand.detect(input_path)
+        except Exception as error:
+            base.log(f"Bilibili brand detection skipped: {error}")
 
     if not segments:
         raise RuntimeError(
@@ -307,6 +283,7 @@ def main() -> None:
         "ocrDecodeProxyUsed": proxy_used,
         **({"bilibiliBrand": brand_detection} if brand_detection else {}),
         "initialRenderStyle": initial_render_style,
+        "outputAspect": aspect,
         "ocr": {
             **video_info,
             "modelSize": os.getenv("OCR_MODEL_SIZE", "small"),
@@ -323,9 +300,9 @@ def main() -> None:
     # Final render deliberately uses input_path, not the compatibility proxy, so the
     # source audio is preserved and the proxy never becomes the user's final media.
     if initial_render_style == "ocr_overlay":
-        render_ocr_overlay.render(input_path, vi_srt, metadata_path, output_video, platform)
+        render_ocr_overlay.render(input_path, vi_srt, metadata_path, output_video, platform, aspect=aspect)
     else:
-        ocr.render_ocr_subtitles(input_path, vi_srt, output_video, text_region)
+        ocr.render_ocr_subtitles(input_path, vi_srt, output_video, text_region, segments, aspect)
     timings["render"] = round(time.perf_counter() - render_started, 3)
     timings["total"] = round(time.perf_counter() - started, 3)
     metadata["timings"] = timings
