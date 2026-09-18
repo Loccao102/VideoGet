@@ -120,6 +120,35 @@ func (m *Manager) RerenderSubtitles(id string) (Job, error) {
 	return m.RerenderSubtitlesWithStyle(id, SubtitleRenderStandard)
 }
 
+func cloneJobSnapshot(job Job) Job {
+	if job.AspectOutputs != nil {
+		cloned := make(map[string]string, len(job.AspectOutputs))
+		for key, value := range job.AspectOutputs {
+			cloned[key] = value
+		}
+		job.AspectOutputs = cloned
+	}
+	if job.Localization != nil {
+		localization := *job.Localization
+		job.Localization = &localization
+	}
+	return job
+}
+
+func (m *Manager) failOptionalRender(id string, previous Job, err error) {
+	if previous.Status == JobDone && reusableMedia(previous.Output) {
+		snapshot := cloneJobSnapshot(previous)
+		m.update(id, func(current *Job) {
+			*current = snapshot
+			current.Status = JobDone
+			current.Error = fmt.Sprintf("rerender failed; previous completed output kept: %v", err)
+			current.UpdatedAt = time.Now().UTC()
+		})
+		return
+	}
+	m.failOptionalRender(id, previous, err)
+}
+
 func normalizeOCRRenderStyle(style string) (string, bool) {
 	switch style {
 	case SubtitleRenderOCROverlay, SubtitleRenderOCRClean:
@@ -173,17 +202,18 @@ func (m *Manager) RerenderSubtitlesWithStyle(id, style string) (Job, error) {
 		}
 	}
 
+	previous := cloneJobSnapshot(job)
 	m.update(id, func(current *Job) {
 		current.Status = JobRendering
 		current.Error = ""
 		current.UpdatedAt = time.Now().UTC()
 	})
 	updated, _ := m.Get(id)
-	go m.runSubtitleRender(id, style, overlayStyle)
+	go m.runSubtitleRender(id, style, overlayStyle, previous)
 	return updated, nil
 }
 
-func (m *Manager) runSubtitleRender(id, style, overlayStyle string) {
+func (m *Manager) runSubtitleRender(id, style, overlayStyle string, previous Job) {
 	job, ok := m.Get(id)
 	if !ok {
 		return
@@ -201,7 +231,7 @@ func (m *Manager) runSubtitleRender(id, style, overlayStyle string) {
 
 	subtitle, err := editableSubtitlePath(job)
 	if err != nil {
-		m.fail(id, JobLocalizationFailed, err)
+		m.failOptionalRender(id, previous, err)
 		return
 	}
 	revision := job.SubtitleRevision
@@ -215,7 +245,7 @@ func (m *Manager) runSubtitleRender(id, style, overlayStyle string) {
 	if overlayStyle != "" {
 		metadata, metaErr := ocrMetadataPath(job)
 		if metaErr != nil {
-			m.fail(id, JobLocalizationFailed, metaErr)
+			m.failOptionalRender(id, previous, metaErr)
 			return
 		}
 		output = filepath.Join(outputDir, fmt.Sprintf("%s.ocr-%s-r%d.mp4", stem, overlayStyle, revision))
@@ -236,7 +266,7 @@ func (m *Manager) runSubtitleRender(id, style, overlayStyle string) {
 		err = m.localizer.RenderSubtitles(ctx, job.SourceOutput, subtitle, output)
 	}
 	if err != nil {
-		m.fail(id, JobLocalizationFailed, err)
+		m.failOptionalRender(id, previous, err)
 		return
 	}
 
@@ -244,7 +274,7 @@ func (m *Manager) runSubtitleRender(id, style, overlayStyle string) {
 	if job.OutputAspect != OutputAspectOriginal {
 		converted, convertErr := m.applyOutputAspect(ctx, output, job.OutputAspect)
 		if convertErr != nil {
-			m.fail(id, JobLocalizationFailed, convertErr)
+			m.failOptionalRender(id, previous, convertErr)
 			return
 		}
 		finalOutput = converted
