@@ -69,6 +69,37 @@ def has_audio_stream(path: Path) -> bool:
     return process.returncode == 0 and bool(process.stdout.strip())
 
 
+def audio_codec(path: Path) -> str:
+    process = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=codec_name",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(path),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if process.returncode != 0:
+        return ""
+    return process.stdout.strip().lower()
+
+
+def mp4_audio_codec_args(path: Path, bitrate: str = "192k") -> list[str]:
+    """Copy MP4-friendly audio; transcode uncommon codecs to AAC for compatibility."""
+    codec = audio_codec(path)
+    if codec in {"aac", "mp3", "alac", "ac3", "eac3"}:
+        return ["-c:a", "copy"]
+    return ["-c:a", "aac", "-b:a", bitrate]
+
+
 def srt_time(seconds: float) -> str:
     milliseconds = max(0, int(round(seconds * 1000)))
     hours, milliseconds = divmod(milliseconds, 3_600_000)
