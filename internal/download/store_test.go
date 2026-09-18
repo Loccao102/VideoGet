@@ -22,6 +22,11 @@ func TestJobStoreRoundTrip(t *testing.T) {
 		Status:           JobDone,
 		ProcessingMode:   ProcessingSubtitles,
 		OutputAspect:     OutputAspect3x4,
+		RenderedOutput:   "/downloads/job-1/localized/final.base.mp4",
+		AspectOutputs: map[string]string{
+			OutputAspectOriginal: "/downloads/job-1/localized/final.base.mp4",
+			OutputAspect3x4:      "/downloads/job-1/localized/final.aspect-3x4.mp4",
+		},
 		SubtitleRevision: 3,
 		Video: model.Video{
 			ID:       "BV123",
@@ -61,6 +66,13 @@ func TestJobStoreRoundTrip(t *testing.T) {
 	}
 	if got.ProcessingMode != ProcessingSubtitles || got.OutputAspect != OutputAspect3x4 || got.SubtitleRevision != 3 {
 		t.Fatalf("processing state = %q/%q/r%d, want subtitles/3:4/r3", got.ProcessingMode, got.OutputAspect, got.SubtitleRevision)
+	}
+	if got.RenderedOutput != job.RenderedOutput {
+		t.Fatalf("RenderedOutput = %q, want %q", got.RenderedOutput, job.RenderedOutput)
+	}
+	if got.AspectOutputs[OutputAspectOriginal] != job.AspectOutputs[OutputAspectOriginal] ||
+		got.AspectOutputs[OutputAspect3x4] != job.AspectOutputs[OutputAspect3x4] {
+		t.Fatalf("unexpected aspect outputs round trip: %#v", got.AspectOutputs)
 	}
 	if got.Localization == nil || got.Localization.Segments != 12 || got.Localization.DetectedLanguage != "zh" {
 		t.Fatalf("unexpected localization round trip: %#v", got.Localization)
