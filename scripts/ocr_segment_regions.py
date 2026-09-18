@@ -81,43 +81,20 @@ def _expand_detail(region: tuple[float, float, float, float]) -> tuple[float, fl
     return nx, ny, right - nx, bottom - ny
 
 
-def _merge_overlapping_boxes(
+def _detail_boxes(
     boxes: list[tuple[float, float, float, float]],
 ) -> list[tuple[float, float, float, float]]:
-    """Merge only boxes that clearly belong to the same OCR text line/word run."""
+    """Keep OCR detections separate so cleanup never becomes one giant blur block."""
     if not boxes:
         return []
-    pending = sorted(boxes, key=lambda item: (item[1], item[0]))
-    merged: list[list[float]] = []
-    y_tolerance = _env_float("OCR_SEGMENT_DETAIL_Y_TOLERANCE", 0.012)
-    x_gap = _env_float("OCR_SEGMENT_DETAIL_X_GAP", 0.018)
-
-    for x, y, w, h in pending:
-        right = x + w
-        bottom = y + h
-        cy = y + h / 2.0
-        matched = False
-        for item in merged:
-            ix, iy, iw, ih = item
-            iright = ix + iw
-            ibottom = iy + ih
-            icy = iy + ih / 2.0
-            vertical_overlap = max(0.0, min(bottom, ibottom) - max(y, iy))
-            min_h = max(0.001, min(h, ih))
-            same_line = vertical_overlap / min_h >= 0.45 or abs(cy - icy) <= y_tolerance
-            close_x = x <= iright + x_gap and right >= ix - x_gap
-            if same_line and close_x:
-                nx = min(ix, x)
-                ny = min(iy, y)
-                nr = max(iright, right)
-                nb = max(ibottom, bottom)
-                item[:] = [nx, ny, nr - nx, nb - ny]
-                matched = True
-                break
-        if not matched:
-            merged.append([x, y, w, h])
-
-    return [_expand_detail(tuple(item)) for item in merged]
+    max_boxes = _env_int("OCR_SEGMENT_DETAIL_MAX_BOXES", 12, 1)
+    cleaned = []
+    for region in sorted(boxes, key=lambda item: (item[1], item[0]))[:max_boxes]:
+        x, y, w, h = region
+        if w <= 0.002 or h <= 0.002:
+            continue
+        cleaned.append(_expand_detail(region))
+    return cleaned
 
 
 def _sample_times(start: float, end: float, count: int) -> list[float]:
@@ -183,7 +160,7 @@ def attach_segment_bboxes(input_path: Path, segments: list[dict], video_info: di
                 detail_score = similarity * max(0.01, float(confidence))
                 if detail_score > best_detail_score:
                     best_detail_score = detail_score
-                    best_detail_boxes = _merge_overlapping_boxes(boxes)
+                    best_detail_boxes = _detail_boxes(boxes)
 
             bbox = _robust_bbox(candidate_regions)
             if bbox is None:
