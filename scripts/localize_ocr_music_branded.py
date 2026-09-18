@@ -73,12 +73,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--input", required=True)
     parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--aspect", default="original")
     known, _ = parser.parse_known_args()
 
     input_path = Path(known.input).resolve()
     output_dir = Path(known.output_dir).resolve()
     stem = input_path.stem
     platform = infer_platform(input_path)
+    aspect = known.aspect.strip().lower() or "original"
     original_render = legacy.render_ocr_subtitles
     captured: dict = {}
     temp_metadata = output_dir / f".{stem}.ocr-music-overlay.json"
@@ -88,25 +90,20 @@ def main() -> None:
         subtitle: Path,
         output: Path,
         text_region: tuple[float, float, float, float],
+        segments: list[dict] | None = None,
+        render_aspect: str = "original",
     ) -> None:
-        original_srt = output_dir / f"{stem}.ocr.original.srt"
-        segments = parse_source_srt(original_srt)
-        bbox_count = 0
-        if segments and env_bool("OCR_MUSIC_ATTACH_SEGMENT_BBOX", True):
-            try:
-                bbox_count = ocr_segment_regions.attach_segment_bboxes(
-                    source,
-                    segments,
-                    {"region": text_region},
-                )
-            except Exception as error:
-                base.log(f"OCR+Music bbox enrichment unavailable; using global region: {error}")
+        if not segments:
+            original_srt = output_dir / f"{stem}.ocr.original.srt"
+            segments = parse_source_srt(original_srt)
+        bbox_count = sum(1 for segment in (segments or []) if segment.get("bbox"))
 
         metadata = {
             "input": str(source),
             "mode": "ocr_music",
             "sourcePlatform": platform,
-            "segments": segments,
+            "outputAspect": render_aspect or aspect,
+            "segments": segments or [],
             "ocr": {
                 "region": list(text_region),
                 "textRegion": list(text_region),
@@ -115,13 +112,20 @@ def main() -> None:
         }
         temp_metadata.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
         try:
-            render_ocr_overlay.render(source, subtitle, temp_metadata, output, platform)
+            render_ocr_overlay.render(
+                source,
+                subtitle,
+                temp_metadata,
+                output,
+                platform,
+                aspect=render_aspect or aspect,
+            )
             captured.update(json.loads(temp_metadata.read_text(encoding="utf-8")))
         except Exception as error:
             if not env_bool("OCR_MUSIC_OVERLAY_FALLBACK", True):
                 raise
             base.log(f"OCR+Music overlay render failed; falling back to legacy render: {error}")
-            original_render(source, subtitle, output, text_region)
+            original_render(source, subtitle, output, text_region, segments, render_aspect or aspect)
 
     legacy.render_ocr_subtitles = branded_render
     try:
