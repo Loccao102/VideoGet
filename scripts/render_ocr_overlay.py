@@ -3,6 +3,7 @@
 
 Overlay styles:
 - clean (default): blur source text, then place bold Vietnamese text with outline/shadow;
+- inpaint: remove the source caption pixels first, then place Vietnamese text;
 - capsule: clean + a small translucent backing around the translated line;
 - box: legacy heavy black box for lower captions, blur for upper captions.
 """
@@ -25,6 +26,8 @@ STYLE_ALIASES = {
     "clean": "clean",
     "ocr_clean": "clean",
     "ocr_overlay": "clean",
+    "inpaint": "inpaint",
+    "ocr_inpaint": "inpaint",
     "capsule": "capsule",
     "ocr_capsule": "capsule",
     "box": "box",
@@ -40,7 +43,7 @@ def normalize_style(value: str | None) -> str:
     raw = (value or os.getenv("OCR_OVERLAY_STYLE", "clean")).strip().lower()
     style = STYLE_ALIASES.get(raw)
     if style is None:
-        raise RuntimeError("OCR overlay style must be clean, capsule, or box")
+        raise RuntimeError("OCR overlay style must be clean, inpaint, capsule, or box")
     return style
 
 
@@ -196,7 +199,7 @@ def build_positioned_ass(entries: list[dict], ass_path: Path, width: int, height
     bottom_size = smart.env_int("OCR_OVERLAY_BOTTOM_FONT_SIZE", smart.env_int("OCR_OVERLAY_FONT_SIZE", max(18, min(42, int(min(width, height) * 0.047))), 12), 12)
     upper_size = smart.env_int("OCR_OVERLAY_UPPER_FONT_SIZE", smart.env_int("OCR_OVERLAY_FONT_SIZE", max(18, min(38, int(min(width, height) * 0.042))), 12), 12)
 
-    if render_style == "clean":
+    if render_style in {"clean", "inpaint"}:
         bottom_outline = smart.env_float("OCR_OVERLAY_CLEAN_OUTLINE", 2.8, 0.0)
         upper_outline = smart.env_float("OCR_OVERLAY_CLEAN_UPPER_OUTLINE", 2.8, 0.0)
         shadow = smart.env_float("OCR_OVERLAY_CLEAN_SHADOW", 1.1, 0.0)
@@ -294,6 +297,29 @@ def render(
     video_label = "0:v"
     cleanup_index = 0
 
+    render_input_path = input_path
+    inpaint_path: Path | None = None
+    inpaint_result: dict | None = None
+    inpaint_ok = False
+    if render_style == "inpaint":
+        inpaint_path = output_path.parent / f"{output_path.stem}.source-clean.mp4"
+        try:
+            import inpaint_subtitles
+            inpaint_result = inpaint_subtitles.clean_video(input_path, metadata_path, inpaint_path)
+            render_input_path = inpaint_path
+            inpaint_ok = True
+            base.log(
+                "OCR inpaint cleanup: "
+                f"frames={inpaint_result.get('touchedFrames', 0)}/{inpaint_result.get('frames', 0)}, "
+                f"segments={inpaint_result.get('segments', 0)}"
+            )
+        except Exception as error:
+            if not smart.env_bool("OCR_INPAINT_FALLBACK_BLUR", True):
+                raise
+            base.log(f"OCR inpaint failed; falling back to blur cleanup: {error}")
+            render_input_path = input_path
+            inpaint_ok = False
+
     brand_regions, brand_side, brand_detection = resolve_bilibili_brand(input_path, metadata, platform)
     video_label, cleanup_index = add_bilibili_cleanup(filters, video_label, cleanup_index, brand_regions)
 
@@ -317,10 +343,11 @@ def render(
             video_label = out
             cleanup_index += 1
         else:
-            # Clean and capsule always remove the original characters first. Box mode
-            # does the same for upper/middle captions; only lower box mode fully covers.
-            video_label = smart.add_blur_region(filters, video_label, cleanup_index, source_region, source_blur, enable)
-            cleanup_index += 1
+            # Inpaint mode has already removed source pixels from render_input_path.
+            # If inpainting failed and fallback is enabled, retain the old blur cleanup.
+            if render_style != "inpaint" or not inpaint_ok:
+                video_label = smart.add_blur_region(filters, video_label, cleanup_index, source_region, source_blur, enable)
+                cleanup_index += 1
 
             if render_style == "capsule":
                 out = f"ocrcapsule{cleanup_index}"
@@ -360,7 +387,7 @@ def render(
     if video_label != "vout":
         filters.append(f"[{video_label}]null[vout]")
 
-    cmd = ["ffmpeg", "-y", "-i", str(input_path)]
+    cmd = ["ffmpeg", "-y", "-i", str(render_input_path)]
     if badge_path is not None:
         cmd += ["-i", str(badge_path)]
     cmd += ["-filter_complex", ";".join(filters), "-map", "[vout]"]
@@ -373,16 +400,26 @@ def render(
     ]
 
     metadata["lastOverlayStyle"] = render_style
+    metadata["lastSourceTextRemoval"] = "inpaint" if render_style == "inpaint" and inpaint_ok else "blur"
+    if inpaint_result is not None:
+        metadata["lastInpaint"] = inpaint_result
     if brand_detection is not None or metadata.get("lastOverlayStyle") != render_style:
         metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
     else:
         metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
     base.log(
-        f"OCR overlay render: style={render_style}, platform={platform or 'unknown'}, "
-        f"segment bbox matched={matched}/{len(entries)}, brandSide={brand_side or 'none'}, "
-        f"brandDetect={(brand_detection or {}).get('source', 'none')}"
+        f"OCR overlay render: style={render_style}, sourceRemove={metadata.get('lastSourceTextRemoval')}, "
+        f"platform={platform or 'unknown'}, segment bbox matched={matched}/{len(entries)}, "
+        f"brandSide={brand_side or 'none'}, brandDetect={(brand_detection or {}).get('source', 'none')}"
     )
-    base.run(cmd)
+    try:
+        base.run(cmd)
+    finally:
+        if inpaint_path is not None and inpaint_path != input_path and not smart.env_bool("OCR_INPAINT_KEEP_TEMP", False):
+            try:
+                inpaint_path.unlink(missing_ok=True)
+            except OSError as error:
+                base.log(f"Could not remove inpaint temp video: {error}")
 
 
 def main() -> None:
