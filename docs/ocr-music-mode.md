@@ -7,16 +7,20 @@ VideoGet has two OCR-first localization modes for short videos whose useful cont
 Use this when you want Vietnamese subtitles from on-screen text but want to keep the source video/audio.
 
 ```text
-Downloaded video
-  -> sample 2-3 frames/sec
-  -> RapidOCR / PP-OCRv6 on likely caption region
-  -> merge repeated OCR observations into timed segments
+Downloaded source video
+  -> FFmpeg decodes only sampled frames directly from source
+  -> RapidOCR / PP-OCRv6 gets text + bbox in the same pass
+  -> merge repeated observations into timed segments
   -> translate with the configured VideoGet translation provider
-  -> derive the source-caption footprint from OCR boxes
-  -> blur that footprint only while captions are active
-  -> burn Vietnamese subtitles into the source video
-  -> keep original audio
+  -> one final video encode:
+       blur tight source-text bbox regions
+       + Vietnamese subtitle
+       + optional Bilibili branding
+       + selected social aspect
+  -> stream-copy original audio
 ```
+
+There is no full-video H.264 OCR compatibility proxy in the normal OCR path, and there is no second OCR pass just to recover bbox geometry.
 
 The web UI exposes this as a dedicated **OCR → Sub Việt** button on every video card and as the bulk mode `OCR chữ → Sub Việt + giữ video/audio gốc`.
 
@@ -27,12 +31,18 @@ Editing the generated SRT and pressing **Lưu + render lại** renders from the 
 Use this when the same OCR subtitle flow should finish with background music instead of keeping the source audio unchanged.
 
 ```text
-Downloaded video
-  -> OCR + translate + Vietnamese subtitle
-  -> clean source caption footprint
-  -> burn Vietnamese subtitle
-  -> replace/duck/mix source audio with local background music
+Downloaded source video
+  -> FFmpeg sampled-frame OCR + bbox
+  -> translate
+  -> one video encode:
+       cleanup + Vietnamese subtitle + branding + aspect
+  -> music mix
+       video stream is copied (-c:v copy)
+       only audio is rebuilt
+  -> delete temporary subbed container
 ```
+
+The final music file therefore does not encode the video a second time.
 
 ## Music
 
@@ -59,6 +69,11 @@ OCR_TEXT_SIMILARITY=0.78
 OCR_IGNORE_PERSISTENT_SEC=12
 OCR_TRANSLATE=true
 OCR_REMOVE_SOURCE_TEXT=true
+
+# Final OCR video quality is intentionally high on every hardware tier.
+OCR_RENDER_CRF=18
+OCR_RENDER_PRESET=
+OCR_KEEP_SUBBED_INTERMEDIATE=false
 ```
 
 Music-only settings:
@@ -90,7 +105,7 @@ OLLAMA_MODEL=qwen3:1.7b
 LOCALIZE_WORKER_PREWARM=false
 ```
 
-This keeps OCR CPU-only and avoids loading Whisper in advance. Increase `OCR_FPS` or switch to `small` if very short/fast-changing captions are missed.
+This keeps OCR CPU-only and avoids loading Whisper in advance. Low still uses `OCR_RENDER_CRF=18`; it saves work by reducing concurrency and redundant encode/decode passes, not by lowering final video quality. Increase `OCR_FPS` or switch to `small` if very short/fast-changing captions are missed.
 
 ## Troubleshooting
 
