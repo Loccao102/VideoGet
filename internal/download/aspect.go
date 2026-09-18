@@ -3,8 +3,10 @@ package download
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const (
@@ -59,4 +61,128 @@ func (m *Manager) applyOutputAspect(ctx context.Context, input, aspect string) (
 		return "", err
 	}
 	return output, nil
+}
+
+
+func aspectBaseFromDerivative(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	lower := strings.ToLower(path)
+	index := strings.LastIndex(lower, ".aspect-")
+	if index < 0 || !strings.HasSuffix(lower, ".mp4") {
+		return ""
+	}
+	candidate := path[:index] + ".mp4"
+	if reusableMedia(candidate) {
+		return candidate
+	}
+	return ""
+}
+
+func completedAspectBase(job Job) string {
+	if reusableMedia(job.RenderedOutput) {
+		return job.RenderedOutput
+	}
+	if job.ProcessingMode == ProcessingDownload && reusableMedia(job.SourceOutput) {
+		return job.SourceOutput
+	}
+	if candidate := aspectBaseFromDerivative(job.Output); candidate != "" {
+		return candidate
+	}
+	if job.Localization != nil {
+		if candidate := aspectBaseFromDerivative(job.Localization.OutputVideo); candidate != "" {
+			return candidate
+		}
+	}
+	if reusableMedia(job.Output) {
+		return job.Output
+	}
+	return ""
+}
+
+// RenderAspectVariant creates another aspect-ratio version from an already
+// completed job without rerunning OCR, translation, subtitles or TTS.
+func (m *Manager) RenderAspectVariant(id, aspect string) (Job, error) {
+	id = strings.TrimSpace(id)
+	aspect, err := validateOutputAspect(aspect)
+	if err != nil {
+		return Job{}, err
+	}
+	job, ok := m.Get(id)
+	if !ok {
+		return Job{}, fmt.Errorf("job not found")
+	}
+	if job.Status != JobDone {
+		return Job{}, fmt.Errorf("job must be complete before rendering another aspect ratio")
+	}
+	base := completedAspectBase(job)
+	if base == "" {
+		return Job{}, fmt.Errorf("completed rendered video is unavailable")
+	}
+	if existing := strings.TrimSpace(job.AspectOutputs[aspect]); existing != "" && reusableMedia(existing) {
+		return job, nil
+	}
+
+	m.update(id, func(current *Job) {
+		current.Status = JobRendering
+		current.Error = ""
+		current.UpdatedAt = time.Now().UTC()
+	})
+	updated, _ := m.Get(id)
+	go m.runAspectVariant(id, aspect, base)
+	return updated, nil
+}
+
+func (m *Manager) runAspectVariant(id, aspect, base string) {
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		time.Duration(envPositiveInt("JOB_TIMEOUT_MINUTES", 180))*time.Minute,
+	)
+	activeState, active := m.registerActiveJob(id, cancel)
+	if !active {
+		cancel()
+		return
+	}
+	defer func() {
+		cancel()
+		m.unregisterActiveJob(id, activeState)
+	}()
+
+	output := base
+	var err error
+	if aspect != OutputAspectOriginal {
+		output, err = m.applyOutputAspect(ctx, base, aspect)
+	}
+	if err != nil {
+		m.update(id, func(current *Job) {
+			current.Status = JobDone
+			current.Error = fmt.Sprintf("aspect %s render failed: %v", aspect, err)
+			current.UpdatedAt = time.Now().UTC()
+		})
+		return
+	}
+	if info, statErr := os.Stat(output); statErr != nil || info.IsDir() || info.Size() <= 0 {
+		m.update(id, func(current *Job) {
+			current.Status = JobDone
+			current.Error = fmt.Sprintf("aspect %s render produced no usable video", aspect)
+			current.UpdatedAt = time.Now().UTC()
+		})
+		return
+	}
+
+	m.update(id, func(current *Job) {
+		current.Status = JobDone
+		current.Error = ""
+		if current.RenderedOutput == "" {
+			current.RenderedOutput = base
+		}
+		if current.AspectOutputs == nil {
+			current.AspectOutputs = map[string]string{}
+		}
+		current.AspectOutputs[OutputAspectOriginal] = base
+		current.AspectOutputs[aspect] = output
+		current.UpdatedAt = time.Now().UTC()
+	})
 }
