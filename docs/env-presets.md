@@ -8,7 +8,7 @@ VideoGet có 3 preset phần cứng rõ ràng. Mục tiêu của các preset là
 
 | Tier | File | CPU logical threads | RAM | GPU | Storage | OCR | Ollama | Localization | Render |
 |---|---|---:|---:|---|---|---|---|---:|---|
-| **Yếu** | `.env.low.example` | 4-8 | 8-16 GB | Không cần | SSD nên có | `tiny`, 2 FPS | `qwen3:1.7b` | 1 | `ultrafast`, CRF 23 |
+| **Yếu** | `.env.low.example` | 4-8 | 8-16 GB | Không cần | SSD nên có | `tiny`, 1.5 FPS | `qwen3:1.7b` | 1 | `ultrafast`, CRF 23 |
 | **Vừa** | `.env.medium.example` | 8-16 | 16-32 GB | Optional | SSD/NVMe | `small`, 3 FPS | `qwen3:4b` | 1 | `veryfast`, CRF 21 |
 | **Cao** | `.env.high.example` | 20-32+ | 32-64+ GB | Không bắt buộc; hữu ích cho Ollama | NVMe khuyến nghị | `medium`, 4 FPS | `qwen3:8b` | 2 | `fast`, CRF 20 |
 
@@ -149,7 +149,7 @@ Tăng FPS gần như tăng trực tiếp số lần detect/recognize OCR.
 
 Preset:
 
-- Low: 2
+- Low: 1.5
 - Medium: 3
 - High: 4
 
@@ -159,7 +159,7 @@ Nếu caption thay đổi chậm, tăng lên 5-6 FPS thường không đáng v�
 
 Giới hạn cứng tổng số frame OCR cho một video.
 
-- Low: 360
+- Low: 300
 - Medium: 650
 - High: 1200
 
@@ -322,6 +322,22 @@ Chất lượng proxy tạm.
 
 Proxy chỉ phục vụ OCR nên không cần chất lượng như final video.
 
+## Proxy nhẹ cho Low
+
+Nguồn Bilibili AV1 có thể chỉ 15-25 MB nhưng nếu transcode nguyên 1080p/30fps sang H.264 `ultrafast` thì proxy tạm có thể phình lên 50-100 MB. Low giờ không làm vậy nữa:
+
+```env
+OCR_DECODE_PROXY_MAX_WIDTH=960
+OCR_DECODE_PROXY_FPS=8
+OCR_DECODE_PROXY_CRF=30
+OCR_DECODE_PROXY_THREADS=4
+OCR_SEGMENT_BBOX_SAMPLES=2
+```
+
+Proxy này chỉ phục vụ OCR/bbox. Final render vẫn dùng video gốc, nên việc giảm proxy xuống 960px/8fps không hạ độ phân giải hay fps của output cuối. BBox dùng tọa độ normalized nên vẫn map chính xác về source.
+
+Bilibili branding cũng tái sử dụng chính OCR-compatible input trước khi proxy bị xóa, tránh tạo thêm một proxy H.264 riêng chỉ để dò uploader mark.
+
 ---
 
 # 7. Ollama / Translation
@@ -478,7 +494,7 @@ Tăng lên `0.50-0.60` nếu muốn bảo thủ hơn và ưu tiên giữ toàn b
 
 ## `ASPECT_OUTPUT_CRF`
 
-Mặc định `18` để derivative social hạn chế suy giảm chất lượng sau một lần encode thêm. `ASPECT_OUTPUT_PRESET` để trống sẽ kế thừa `VIDEO_PRESET` của tier hiện tại.
+Mặc định `18` ở Balanced/High để derivative social hạn chế suy giảm chất lượng sau một lần encode thêm. Low dùng `23` để giảm thời gian encode, bitrate và dung lượng file. `ASPECT_OUTPUT_PRESET` để trống sẽ kế thừa `VIDEO_PRESET` của tier hiện tại.
 
 ## Target resolution
 

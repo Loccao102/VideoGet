@@ -24,6 +24,7 @@ from pathlib import Path
 
 import cv2
 
+import bilibili_brand
 import localize as base
 import localize_fast as fast  # noqa: F401 - installs optimized translation overrides on base
 import localize_ocr_music as ocr
@@ -81,6 +82,11 @@ def prepare_ocr_input(input_path: Path, output_dir: Path) -> tuple[Path, bool, s
     proxy = output_dir / f"{input_path.stem}.ocr-decode-proxy.mp4"
     preset = os.getenv("OCR_DECODE_PROXY_PRESET", "ultrafast").strip() or "ultrafast"
     crf = str(ocr.env_int("OCR_DECODE_PROXY_CRF", 28, 0))
+    # The proxy exists only so OpenCV can sample OCR frames. It does not need
+    # source resolution or frame rate. Downscaling here dramatically reduces
+    # CPU, disk I/O and temporary H.264 size for AV1 sources.
+    max_width = ocr.env_int("OCR_DECODE_PROXY_MAX_WIDTH", 1280, 320)
+    proxy_fps = ocr.env_float("OCR_DECODE_PROXY_FPS", 12.0, 1.0)
     # Keep this numeric until the ffmpeg command is built. Converting it to str
     # before the comparison causes Python 3 to raise: str > int.
     threads = ocr.env_int("OCR_DECODE_PROXY_THREADS", 0, 0)
@@ -88,7 +94,10 @@ def prepare_ocr_input(input_path: Path, output_dir: Path) -> tuple[Path, bool, s
     reason = f"codec={codec or 'unknown'}" if codec else "OpenCV cannot decode source"
     if force_proxy:
         reason += ", forced by OCR_FORCE_DECODE_PROXY"
-    base.log(f"OCR decode compatibility proxy required ({reason}); transcoding video-only H.264 proxy on CPU")
+    base.log(
+        "OCR decode compatibility proxy required "
+        f"({reason}); H.264 proxy maxWidth={max_width}, fps={proxy_fps:g}, crf={crf}"
+    )
 
     cmd = [
         "ffmpeg",
@@ -102,6 +111,8 @@ def prepare_ocr_input(input_path: Path, output_dir: Path) -> tuple[Path, bool, s
         "-map",
         "0:v:0",
         "-an",
+        "-vf",
+        f"scale='min({max_width},iw)':-2:flags=fast_bilinear,fps={proxy_fps:g}",
         "-c:v",
         "libx264",
         "-preset",
@@ -118,6 +129,7 @@ def prepare_ocr_input(input_path: Path, output_dir: Path) -> tuple[Path, bool, s
 
     if not proxy.exists() or proxy.stat().st_size <= 0:
         raise RuntimeError("ffmpeg created no usable OCR decode proxy")
+    base.log(f"OCR proxy ready: {proxy.stat().st_size / (1024 * 1024):.1f} MiB")
     if not opencv_can_decode(proxy):
         raise RuntimeError(
             "source video cannot be decoded by OpenCV even after H.264 compatibility transcoding; "
@@ -172,6 +184,8 @@ def main() -> None:
     timings["decodeProxy"] = round(time.perf_counter() - proxy_started, 3) if proxy_used else 0.0
 
     bbox_attached = 0
+    platform = infer_platform(input_path)
+    brand_detection = None
     try:
         ocr_started = time.perf_counter()
         segments, boxes, video_info = ocr.extract_segments(ocr_input, output_dir)
@@ -232,10 +246,28 @@ def main() -> None:
             except Exception as error:
                 base.log(f"OCR segment bbox unavailable; global region fallback will be used: {error}")
             timings["bbox"] = round(time.perf_counter() - bbox_started, 3)
+
+        # Reuse the OCR-compatible proxy for Bilibili uploader detection while it
+        # still exists. Otherwise render_ocr_overlay would need another AV1->H.264
+        # compatibility transcode just to inspect a few top-band frames.
+        if (
+            platform == "bilibili"
+            and ocr.env_bool("OCR_OVERLAY_HIDE_BILIBILI", True)
+            and ocr.env_bool("OCR_OVERLAY_BILIBILI_AUTO_DETECT", True)
+        ):
+            try:
+                brand_detection = bilibili_brand.detect(ocr_input)
+                if brand_detection:
+                    base.log("Bilibili brand detection reused OCR-compatible input")
+            except Exception as error:
+                base.log(f"Bilibili brand detection during OCR skipped: {error}")
     finally:
         if proxy_used and ocr_input != input_path and not ocr.env_bool("OCR_KEEP_DECODE_PROXY", False):
             try:
+                proxy_size = ocr_input.stat().st_size if ocr_input.exists() else 0
                 ocr_input.unlink(missing_ok=True)
+                if proxy_size > 0:
+                    base.log(f"OCR proxy removed: {proxy_size / (1024 * 1024):.1f} MiB temporary file")
             except OSError as error:
                 base.log(f"Could not remove OCR decode proxy: {error}")
 
@@ -257,7 +289,6 @@ def main() -> None:
 
     fallback_region = tuple(float(value) for value in video_info["region"])
     text_region = ocr.aggregate_text_region(boxes, fallback_region)
-    platform = infer_platform(input_path)
     initial_render_style = os.getenv("OCR_SUBTITLE_INITIAL_RENDER_STYLE", "ocr_overlay").strip().lower() or "ocr_overlay"
     if initial_render_style not in {"ocr_overlay", "standard"}:
         raise RuntimeError("OCR_SUBTITLE_INITIAL_RENDER_STYLE must be ocr_overlay or standard")
@@ -274,6 +305,7 @@ def main() -> None:
         "sourceVideoCodec": source_codec,
         "sourcePlatform": platform,
         "ocrDecodeProxyUsed": proxy_used,
+        **({"bilibiliBrand": brand_detection} if brand_detection else {}),
         "initialRenderStyle": initial_render_style,
         "ocr": {
             **video_info,
