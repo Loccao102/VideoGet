@@ -88,8 +88,10 @@ transcript cache hit
 - Giữ file `.srt` để chỉnh sửa/re-render.
 - Tạo `*.vi-dubbed.mp4` đã burn subtitle Việt trực tiếp vào video.
 - OCR cleanup lưu bbox nhỏ theo từng detection/dòng chữ và blur riêng từng bbox; không còn bắt buộc gom cả caption thành một khung blur lớn.
-- AV1 OCR proxy không còn cần giữ nguyên 1080p/30fps: proxy có thể downscale + giảm fps chỉ để OCR. Preset Low dùng 960px / 8fps / CRF 30 và xóa proxy ngay sau OCR; final render vẫn dùng source gốc.
-- Bilibili brand detection tái sử dụng OCR-compatible input để tránh tạo thêm một AV1→H.264 proxy thứ hai trong cùng pipeline.
+- OCR trên AV1 không còn tạo **full-video H.264 proxy**. FFmpeg decode trực tiếp source và pipe đúng các frame cần OCR sang Python ở độ phân giải gốc.
+- BBox nguồn được lấy ngay trong cùng pass OCR, nên không còn một lượt seek + OCR riêng chỉ để tìm vị trí chữ.
+- Với OCR job, cleanup chữ nguồn + sub Việt + branding + đổi tỉ lệ được gộp vào **một lần encode video**. `OCR_RENDER_CRF=18` giữ chất lượng cao; Low tiết kiệm thời gian bằng cách bỏ pass thừa, không phải tăng CRF.
+- Mode OCR → Sub Việt stream-copy audio gốc thay vì encode AAC lại. OCR+Music chỉ encode video một lần; bước mix nhạc copy nguyên video stream và chỉ dựng lại audio.
 - Blur nguồn dùng multi-pass mạnh hơn để phá nét chữ sâu hơn nhưng giữ vùng ảnh bị tác động nhỏ.
 - Có thể blur vùng subtitle nguồn đã burn sẵn và các vùng watermark/logo cấu hình.
 - Color-grade nhẹ trước khi export.
@@ -145,9 +147,9 @@ Giữ nguyên
 
 UI mặc định chọn **3:4** cho workflow TikTok / Reels / YouTube Shorts. Video nguồn luôn được giữ nguyên; VideoGet chỉ tạo thêm derivative ở cuối pipeline.
 
-Với **job đã hoàn tất**, UI còn có **Xuất thêm tỉ lệ**. Có thể lấy cùng một bản video đã hoàn thiện và tạo thêm 3:4 / 9:16 / 16:9 / 1:1 mà **không chạy lại OCR, dịch, TTS hay render subtitle**. Các derivative đã tạo được lưu trong `aspectOutputs` của job; bản chính trong `output` không bị ghi đè.
+Với **job đã hoàn tất**, UI còn có **Xuất thêm tỉ lệ**. OCR job tạo aspect mới trực tiếp từ **source gốc + OCR metadata + SRT Việt**: không OCR lại, không dịch lại, không TTS lại và không convert từ derivative trước đó. Cleanup/sub/branding/aspect được render lại trong đúng một encode cho aspect mới.
 
-VideoGet giữ riêng `renderedOutput` là bản hoàn chỉnh **trước bước đổi aspect**. Vì vậy khi tạo thêm tỉ lệ, hệ thống luôn xuất từ bản này thay vì lấy 3:4 rồi convert tiếp sang 9:16, tránh encode/crop chồng làm giảm chất lượng.
+Các mode không phải OCR vẫn dùng `renderedOutput` trước bước đổi aspect như trước. Mọi derivative được lưu trong `aspectOutputs`; bản chính trong `output` không bị ghi đè.
 
 Chiến lược mặc định là `auto`:
 
@@ -337,7 +339,7 @@ Content-Type: application/json
 }
 ```
 
-Endpoint này không chạy lại OCR/dịch/TTS/subtitle. Nó dùng `renderedOutput` trước bước đổi aspect và thêm kết quả vào `aspectOutputs`.
+Endpoint này không chạy lại OCR/dịch/TTS. Với OCR job, nó dùng source gốc + metadata bbox + SRT Việt để render aspect mới trực tiếp; với mode khác, nó tiếp tục dùng `renderedOutput`. Kết quả được thêm vào `aspectOutputs`.
 
 Job hoàn tất có thể trả thêm số liệu:
 
@@ -411,7 +413,8 @@ downloads/
 | `BURN_SUBTITLES` | `true` | hard-sub tiếng Việt |
 | `ASPECT_CONVERT_MODE` | `auto` | auto crop hoặc blur-fill cho tỉ lệ output |
 | `ASPECT_CROP_MIN_RETAIN` | `0.40` | ngưỡng phần khung cần giữ để cho phép crop |
-| `ASPECT_OUTPUT_CRF` | `18` | chất lượng encode derivative social |
+| `ASPECT_OUTPUT_CRF` | `18` | chất lượng encode derivative của mode không phải OCR |
+| `OCR_RENDER_CRF` | `18` | chất lượng encode cuối của OCR single-pass |
 | `ORIGINAL_AUDIO_VOLUME` | `0.08` | audio gốc dưới voice Việt |
 
 ## Kiến trúc hiện tại
