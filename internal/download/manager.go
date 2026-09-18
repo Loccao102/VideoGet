@@ -25,6 +25,7 @@ const (
 	JobDownloading        JobStatus = "downloading"
 	JobLocalizing         JobStatus = "localizing"
 	JobRendering          JobStatus = "rendering"
+	JobAspectRendering    JobStatus = "aspect_rendering"
 	JobDone               JobStatus = "done"
 	JobFailed             JobStatus = "failed"
 	JobLocalizationFailed JobStatus = "localization_failed"
@@ -105,10 +106,21 @@ func NewManager(downloadDir string) (*Manager, error) {
 		job.ProcessingMode = normalizeProcessingMode(job.ProcessingMode)
 		job.OutputAspect = normalizeOutputAspect(job.OutputAspect)
 		switch job.Status {
-		case JobQueued, JobDownloading, JobLocalizing, JobRendering:
+		case JobQueued, JobDownloading, JobLocalizing, JobRendering, JobAspectRendering:
 			job.Status = JobQueued
 			job.UpdatedAt = time.Now().UTC()
 			resume = append(resume, job.ID)
+			if err := store.Upsert(job); err != nil {
+				_ = store.Close()
+				return nil, err
+			}
+		case JobAspectRendering:
+			// An alternate aspect export is derived from an already completed
+			// render. Do not rerun OCR/localization after a restart; return the
+			// job to done and let the user request that derivative again.
+			job.Status = JobDone
+			job.Error = "aspect render was interrupted by restart; run that aspect export again"
+			job.UpdatedAt = time.Now().UTC()
 			if err := store.Upsert(job); err != nil {
 				_ = store.Close()
 				return nil, err
