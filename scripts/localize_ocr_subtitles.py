@@ -24,6 +24,7 @@ from pathlib import Path
 
 import cv2
 
+import bilibili_brand
 import localize as base
 import localize_fast as fast  # noqa: F401 - installs optimized translation overrides on base
 import localize_ocr_music as ocr
@@ -182,6 +183,8 @@ def main() -> None:
     timings["decodeProxy"] = round(time.perf_counter() - proxy_started, 3) if proxy_used else 0.0
 
     bbox_attached = 0
+    platform = infer_platform(input_path)
+    brand_detection = None
     try:
         ocr_started = time.perf_counter()
         segments, boxes, video_info = ocr.extract_segments(ocr_input, output_dir)
@@ -242,6 +245,21 @@ def main() -> None:
             except Exception as error:
                 base.log(f"OCR segment bbox unavailable; global region fallback will be used: {error}")
             timings["bbox"] = round(time.perf_counter() - bbox_started, 3)
+
+        # Reuse the OCR-compatible proxy for Bilibili uploader detection while it
+        # still exists. Otherwise render_ocr_overlay would need another AV1->H.264
+        # compatibility transcode just to inspect a few top-band frames.
+        if (
+            platform == "bilibili"
+            and ocr.env_bool("OCR_OVERLAY_HIDE_BILIBILI", True)
+            and ocr.env_bool("OCR_OVERLAY_BILIBILI_AUTO_DETECT", True)
+        ):
+            try:
+                brand_detection = bilibili_brand.detect(ocr_input)
+                if brand_detection:
+                    base.log("Bilibili brand detection reused OCR-compatible input")
+            except Exception as error:
+                base.log(f"Bilibili brand detection during OCR skipped: {error}")
     finally:
         if proxy_used and ocr_input != input_path and not ocr.env_bool("OCR_KEEP_DECODE_PROXY", False):
             try:
@@ -267,7 +285,6 @@ def main() -> None:
 
     fallback_region = tuple(float(value) for value in video_info["region"])
     text_region = ocr.aggregate_text_region(boxes, fallback_region)
-    platform = infer_platform(input_path)
     initial_render_style = os.getenv("OCR_SUBTITLE_INITIAL_RENDER_STYLE", "ocr_overlay").strip().lower() or "ocr_overlay"
     if initial_render_style not in {"ocr_overlay", "standard"}:
         raise RuntimeError("OCR_SUBTITLE_INITIAL_RENDER_STYLE must be ocr_overlay or standard")
@@ -284,6 +301,7 @@ def main() -> None:
         "sourceVideoCodec": source_codec,
         "sourcePlatform": platform,
         "ocrDecodeProxyUsed": proxy_used,
+        **({"bilibiliBrand": brand_detection} if brand_detection else {}),
         "initialRenderStyle": initial_render_style,
         "ocr": {
             **video_info,
