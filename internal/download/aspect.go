@@ -64,7 +64,7 @@ func (m *Manager) applyOutputAspect(ctx context.Context, input, aspect string) (
 }
 
 
-func aspectBaseFromDerivative(path string) string {
+func aspectBaseCandidateFromDerivative(path string) string {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return ""
@@ -74,8 +74,12 @@ func aspectBaseFromDerivative(path string) string {
 	if index < 0 || !strings.HasSuffix(lower, ".mp4") {
 		return ""
 	}
-	candidate := path[:index] + ".mp4"
-	if reusableMedia(candidate) {
+	return path[:index] + ".mp4"
+}
+
+func aspectBaseFromDerivative(path string) string {
+	candidate := aspectBaseCandidateFromDerivative(path)
+	if candidate != "" && reusableMedia(candidate) {
 		return candidate
 	}
 	return ""
