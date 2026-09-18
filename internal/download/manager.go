@@ -387,7 +387,7 @@ func (m *Manager) run(id string) {
 		job.UpdatedAt = time.Now().UTC()
 	})
 
-	result, err := m.localizer.ProcessMode(ctx, sourceOutput, job.ProcessingMode)
+	result, err := m.localizer.ProcessModeWithAspect(ctx, sourceOutput, job.ProcessingMode, job.OutputAspect)
 	if err != nil {
 		m.update(id, func(job *Job) {
 			job.Status = JobLocalizationFailed
@@ -400,7 +400,8 @@ func (m *Manager) run(id string) {
 
 	renderedOutput := result.OutputVideo
 	finalOutput := renderedOutput
-	if job.OutputAspect != OutputAspectOriginal {
+	aspectHandledInOCRRender := job.ProcessingMode == ProcessingOCRSubtitles || job.ProcessingMode == ProcessingOCRMusic
+	if !aspectHandledInOCRRender && job.OutputAspect != OutputAspectOriginal {
 		m.update(id, func(current *Job) {
 			current.Status = JobRendering
 			current.Error = ""
@@ -421,9 +422,17 @@ func (m *Manager) run(id string) {
 		job.RenderedOutput = renderedOutput
 		job.Error = ""
 		job.Output = finalOutput
-		job.AspectOutputs = map[string]string{OutputAspectOriginal: renderedOutput}
-		if job.OutputAspect != OutputAspectOriginal {
+		job.AspectOutputs = map[string]string{}
+		if aspectHandledInOCRRender {
 			job.AspectOutputs[job.OutputAspect] = finalOutput
+			if job.OutputAspect == OutputAspectOriginal {
+				job.AspectOutputs[OutputAspectOriginal] = finalOutput
+			}
+		} else {
+			job.AspectOutputs[OutputAspectOriginal] = renderedOutput
+			if job.OutputAspect != OutputAspectOriginal {
+				job.AspectOutputs[job.OutputAspect] = finalOutput
+			}
 		}
 		job.UpdatedAt = time.Now().UTC()
 	})
