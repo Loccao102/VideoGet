@@ -69,14 +69,14 @@
 const PLATFORMS=[['douyin','Douyin'],['bilibili','Bilibili'],['kuaishou','Kuaishou'],['xiaohongshu','Xiaohongshu'],['weibo','Weibo'],['xigua','Xigua'],['haokan','Haokan'],['toutiao','Toutiao'],['acfun','AcFun'],['meipai','Meipai'],['weishi','Weishi']];
 const S={results:[],selected:new Set(),keywords:[],previewGeneration:0,editingJob:null,jobList:[],jobSelected:new Set(),bulkBusy:false};
 const $=id=>document.getElementById(id);
-const statusLabel={queued:'Đang chờ',downloading:'Đang tải',localizing:'Đang xử lý nội dung',rendering:'Đang render / đổi tỉ lệ',done:'Hoàn tất',failed:'Tải thất bại',localization_failed:'Xử lý nội dung lỗi'};
+const statusLabel={queued:'Đang chờ',downloading:'Đang tải',localizing:'Đang xử lý nội dung',rendering:'Đang render',aspect_rendering:'Đang xuất thêm tỉ lệ',done:'Hoàn tất',failed:'Tải thất bại',localization_failed:'Xử lý nội dung lỗi'};
 const modeLabel={download:'Chỉ tải',subtitles:'Sub Việt',dub:'Sub + TTS',ocr_music:'OCR + Nhạc',ocr_subtitles:'OCR → Sub Việt'};
 const aspectLabel={original:'Gốc','16:9':'16:9','3:4':'3:4','9:16':'9:16','1:1':'1:1'};
 const platformLabel=Object.fromEntries(PLATFORMS);
 const fmt=n=>n?Intl.NumberFormat('vi',{notation:n>=10000?'compact':'standard',maximumFractionDigits:1}).format(n):'0';
 const sec=n=>Number.isFinite(+n)?`${(+n).toFixed(1)}s`:'-';
 const isOCRJob=j=>j?.processingMode==='ocr_subtitles'||j?.processingMode==='ocr_music';
-const isBusyJob=j=>['queued','downloading','localizing','rendering'].includes(j?.status);
+const isBusyJob=j=>['queued','downloading','localizing','rendering','aspect_rendering'].includes(j?.status);
 const hasSubtitle=j=>!!j?.localization?.vietnameseSubtitle;
 
 function buildSources(){const host=$('sourceGrid');for(const [value,label] of PLATFORMS){const el=document.createElement('label');el.className='source';const cb=document.createElement('input');cb.type='checkbox';cb.name='src';cb.value=value;cb.checked=value==='douyin'||value==='bilibili';el.append(cb,document.createTextNode(label));host.append(el)}}
