@@ -259,8 +259,8 @@ def main() -> None:
     text_region = ocr.aggregate_text_region(boxes, fallback_region)
     platform = infer_platform(input_path)
     initial_render_style = os.getenv("OCR_SUBTITLE_INITIAL_RENDER_STYLE", "ocr_overlay").strip().lower() or "ocr_overlay"
-    if initial_render_style not in {"ocr_overlay", "standard"}:
-        raise RuntimeError("OCR_SUBTITLE_INITIAL_RENDER_STYLE must be ocr_overlay or standard")
+    if initial_render_style not in {"ocr_overlay", "ocr_inpaint", "standard"}:
+        raise RuntimeError("OCR_SUBTITLE_INITIAL_RENDER_STYLE must be ocr_overlay, ocr_inpaint, or standard")
 
     metadata = {
         "input": str(input_path),
@@ -290,8 +290,9 @@ def main() -> None:
     render_started = time.perf_counter()
     # Final render deliberately uses input_path, not the compatibility proxy, so the
     # source audio is preserved and the proxy never becomes the user's final media.
-    if initial_render_style == "ocr_overlay":
-        render_ocr_overlay.render(input_path, vi_srt, metadata_path, output_video, platform)
+    if initial_render_style in {"ocr_overlay", "ocr_inpaint"}:
+        overlay_style = "inpaint" if initial_render_style == "ocr_inpaint" else None
+        render_ocr_overlay.render(input_path, vi_srt, metadata_path, output_video, platform, overlay_style)
     else:
         ocr.render_ocr_subtitles(input_path, vi_srt, output_video, text_region)
     timings["render"] = round(time.perf_counter() - render_started, 3)
