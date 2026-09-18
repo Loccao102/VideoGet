@@ -242,14 +242,19 @@ func (m *Manager) runSubtitleRender(id, style, overlayStyle string, previous Job
 	stem := strings.TrimSuffix(filepath.Base(job.SourceOutput), filepath.Ext(job.SourceOutput))
 	var output string
 
+	aspectHandledInRender := false
 	if overlayStyle != "" {
 		metadata, metaErr := ocrMetadataPath(job)
 		if metaErr != nil {
 			m.failOptionalRender(id, previous, metaErr)
 			return
 		}
-		output = filepath.Join(outputDir, fmt.Sprintf("%s.ocr-%s-r%d.mp4", stem, overlayStyle, revision))
-		err = m.localizer.RenderOCROverlaySubtitles(
+		aspectPart := ""
+		if job.OutputAspect != OutputAspectOriginal {
+			aspectPart = ".aspect-" + aspectSuffix(job.OutputAspect)
+		}
+		output = filepath.Join(outputDir, fmt.Sprintf("%s.ocr-%s-r%d%s.mp4", stem, overlayStyle, revision, aspectPart))
+		err = m.localizer.RenderOCROverlaySubtitlesWithAspect(
 			ctx,
 			job.SourceOutput,
 			subtitle,
@@ -257,7 +262,9 @@ func (m *Manager) runSubtitleRender(id, style, overlayStyle string, previous Job
 			output,
 			job.Video.Platform,
 			overlayStyle,
+			job.OutputAspect,
 		)
+		aspectHandledInRender = true
 	} else if job.ProcessingMode == ProcessingOCRMusic {
 		output = filepath.Join(outputDir, fmt.Sprintf("%s.ocr-music-r%d.mp4", stem, revision))
 		err = m.localizer.RenderOCRMusicSubtitles(ctx, job.SourceOutput, subtitle, output)
@@ -271,7 +278,7 @@ func (m *Manager) runSubtitleRender(id, style, overlayStyle string, previous Job
 	}
 
 	finalOutput := output
-	if job.OutputAspect != OutputAspectOriginal {
+	if !aspectHandledInRender && job.OutputAspect != OutputAspectOriginal {
 		converted, convertErr := m.applyOutputAspect(ctx, output, job.OutputAspect)
 		if convertErr != nil {
 			m.failOptionalRender(id, previous, convertErr)
@@ -285,9 +292,14 @@ func (m *Manager) runSubtitleRender(id, style, overlayStyle string, previous Job
 		current.Error = ""
 		current.RenderedOutput = output
 		current.Output = finalOutput
-		current.AspectOutputs = map[string]string{OutputAspectOriginal: output}
-		if current.OutputAspect != OutputAspectOriginal {
+		current.AspectOutputs = map[string]string{}
+		if aspectHandledInRender {
 			current.AspectOutputs[current.OutputAspect] = finalOutput
+		} else {
+			current.AspectOutputs[OutputAspectOriginal] = output
+			if current.OutputAspect != OutputAspectOriginal {
+				current.AspectOutputs[current.OutputAspect] = finalOutput
+			}
 		}
 		if current.Localization == nil {
 			current.Localization = &localize.Result{VietnameseSubtitle: subtitle}
