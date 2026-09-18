@@ -297,6 +297,14 @@ def main() -> None:
         ocr.render_ocr_subtitles(input_path, vi_srt, output_video, text_region)
     timings["render"] = round(time.perf_counter() - render_started, 3)
     timings["total"] = round(time.perf_counter() - started, 3)
+    # render_ocr_overlay may enrich metadata with brand detection / inpaint stats.
+    # Reload it before writing timings so those render-stage details are not lost.
+    try:
+        rendered_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        if isinstance(rendered_metadata, dict):
+            metadata = rendered_metadata
+    except Exception:
+        pass
     metadata["timings"] = timings
     metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
 
