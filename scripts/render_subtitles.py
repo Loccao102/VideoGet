@@ -6,11 +6,61 @@ import argparse
 import os
 from pathlib import Path
 
+import convert_aspect
 import localize as base
 import smart_render as smart
 
 
-def render(input_path: Path, subtitle_path: Path, output_path: Path) -> None:
+def append_aspect_filter(
+    filters: list[str],
+    input_label: str,
+    source_w: int,
+    source_h: int,
+    aspect: str,
+) -> str:
+    aspect = (aspect or "original").strip().lower()
+    if aspect in {"", "original"}:
+        return input_label
+    if aspect not in convert_aspect.TARGETS:
+        raise RuntimeError("aspect must be original, 16:9, 3:4, 9:16, or 1:1")
+
+    target_w, target_h = convert_aspect.TARGETS[aspect]
+    source_aspect = source_w / source_h
+    target_aspect = target_w / target_h
+    if abs(source_aspect - target_aspect) <= 0.002:
+        filters.append(
+            f"[{input_label}]scale={target_w}:{target_h}:flags=lanczos,setsar=1[aspectout]"
+        )
+        return "aspectout"
+
+    mode = convert_aspect.choose_mode(source_w, source_h, target_w, target_h)
+    if mode == "crop":
+        crop_w, crop_h, x, y = convert_aspect.crop_geometry(
+            source_w, source_h, target_w, target_h
+        )
+        filters.append(
+            f"[{input_label}]crop={crop_w}:{crop_h}:{x}:{y},"
+            f"scale={target_w}:{target_h}:flags=lanczos,setsar=1[aspectout]"
+        )
+        return "aspectout"
+
+    blur = max(4, int(convert_aspect.env_float("ASPECT_BLUR_RADIUS", 24, 4)))
+    filters.append(f"[{input_label}]split=2[aspectbgsrc][aspectfgsrc]")
+    filters.append(
+        f"[aspectbgsrc]scale={target_w}:{target_h}:force_original_aspect_ratio=increase,"
+        f"crop={target_w}:{target_h},boxblur=luma_radius={blur}:luma_power=1[aspectbg]"
+    )
+    filters.append(
+        f"[aspectfgsrc]scale={target_w}:{target_h}:"
+        "force_original_aspect_ratio=decrease:flags=lanczos[aspectfg]"
+    )
+    filters.append(
+        "[aspectbg][aspectfg]overlay=(W-w)/2:(H-h)/2,setsar=1[aspectout]"
+    )
+    return "aspectout"
+
+
+def render(input_path: Path, subtitle_path: Path, output_path: Path, aspect: str = "original") -> None:
     if not input_path.exists():
         raise FileNotFoundError(input_path)
     if not subtitle_path.exists():
@@ -75,7 +125,10 @@ def render(input_path: Path, subtitle_path: Path, output_path: Path) -> None:
     ass_path = output_path.parent / f"{output_path.stem}.ass"
     smart.build_ass_from_srt(subtitle_path, ass_path, layout, width, height)
     escaped = base.escape_subtitle_path(ass_path)
-    filters.append(f"[{video_label}]subtitles='{escaped}'[vout]")
+    filters.append(f"[{video_label}]subtitles='{escaped}'[subbed]")
+    video_label = append_aspect_filter(filters, "subbed", width, height, aspect)
+    if video_label != "vout":
+        filters.append(f"[{video_label}]null[vout]")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     cmd = ["ffmpeg", "-y", "-i", str(input_path)]
@@ -106,8 +159,14 @@ def main() -> None:
     parser.add_argument("--input", required=True)
     parser.add_argument("--subtitle", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--aspect", default="original")
     args = parser.parse_args()
-    render(Path(args.input).resolve(), Path(args.subtitle).resolve(), Path(args.output).resolve())
+    render(
+        Path(args.input).resolve(),
+        Path(args.subtitle).resolve(),
+        Path(args.output).resolve(),
+        args.aspect,
+    )
 
 
 if __name__ == "__main__":

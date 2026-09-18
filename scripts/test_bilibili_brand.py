@@ -2,8 +2,12 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 import bilibili_brand
+
+
+SOURCE = Path(__file__).with_name("bilibili_brand.py")
 
 
 class BilibiliBrandDetectionTests(unittest.TestCase):
@@ -45,6 +49,14 @@ class BilibiliBrandDetectionTests(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result["side"], "left")
         self.assertLess(result["region"][0] + result["region"][2] / 2.0, 0.5)
+
+    def test_ffmpeg_fallback_does_not_create_full_h264_proxy(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+        self.assertIn("def _detect_ffmpeg", source)
+        self.assertIn('"rawvideo", "pipe:1"', source)
+        self.assertIn('"decodeMode"] = "ffmpeg_pipe"', source)
+        self.assertNotIn("def _proxy_for_detection", source)
+        self.assertNotIn("TemporaryDirectory", source)
 
     def test_one_off_corner_text_is_not_enough(self) -> None:
         observations = [{

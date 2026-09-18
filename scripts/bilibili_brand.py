@@ -2,10 +2,10 @@
 """Detect persistent Bilibili uploader/watermark text and choose its side automatically."""
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
-import tempfile
 from pathlib import Path
 
 
@@ -244,16 +244,130 @@ def _detect_cv(input_path: Path) -> tuple[dict | None, int]:
         cap.release()
 
 
-def _proxy_for_detection(input_path: Path, target: Path) -> bool:
+def _read_exact(stream, size: int) -> bytes:
+    chunks = bytearray()
+    while len(chunks) < size:
+        chunk = stream.read(size - len(chunks))
+        if not chunk:
+            break
+        chunks.extend(chunk)
+    return bytes(chunks)
+
+
+def _probe_video(input_path: Path) -> tuple[int, int, float]:
+    process = subprocess.run(
+        [
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=width,height:format=duration",
+            "-of", "json", str(input_path),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if process.returncode != 0:
+        raise RuntimeError(process.stderr.strip() or "ffprobe failed for brand detection")
+    payload = json.loads(process.stdout or "{}")
+    streams = payload.get("streams") or []
+    if not streams:
+        raise RuntimeError("video stream not found for brand detection")
+    width = int(streams[0].get("width") or 0)
+    height = int(streams[0].get("height") or 0)
+    try:
+        duration = float((payload.get("format") or {}).get("duration") or 0.0)
+    except (TypeError, ValueError):
+        duration = 0.0
+    if width <= 0 or height <= 0 or duration <= 0:
+        raise RuntimeError("video metadata unavailable for brand detection")
+    return width, height, duration
+
+
+def _detect_ffmpeg(input_path: Path) -> tuple[dict | None, int]:
+    """Sample a few frames through an ffmpeg raw pipe; never transcode a full proxy."""
+    try:
+        import numpy as np
+        import localize_ocr_music as ocr
+    except Exception:
+        return None, 0
+
+    try:
+        width, height, duration = _probe_video(input_path)
+    except Exception:
+        return None, 0
+
+    samples = env_int("OCR_OVERLAY_BILIBILI_SAMPLES", 6, 3)
+    top_ratio = clamp(env_float("OCR_OVERLAY_BILIBILI_TOP_BAND", 0.20, 0.08), 0.08, 0.35)
+    min_conf = clamp(env_float("OCR_OVERLAY_BILIBILI_OCR_CONFIDENCE", 0.48, 0.0), 0.0, 1.0)
+    max_width = env_int("OCR_OVERLAY_BILIBILI_FFMPEG_MAX_WIDTH", 960, 320)
+    sample_width = min(width, max_width)
+    sample_height = max(2, int(round(height * sample_width / width)))
+    sample_fps = max(0.05, samples / max(duration, 0.1))
+    frame_bytes = sample_width * sample_height * 3
+
     cmd = [
-        "ffmpeg", "-y", "-loglevel", "error", "-hwaccel", "none",
-        "-i", str(input_path), "-map", "0:v:0", "-an",
-        "-vf", "scale='min(960,iw)':-2",
-        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "30",
-        "-pix_fmt", "yuv420p", str(target),
+        "ffmpeg", "-v", "error", "-hwaccel", "none", "-i", str(input_path),
+        "-map", "0:v:0", "-an", "-sn", "-dn",
+        "-vf", f"fps={sample_fps:.8f},scale={sample_width}:{sample_height}:flags=fast_bilinear",
+        "-frames:v", str(samples),
+        "-pix_fmt", "bgr24", "-f", "rawvideo", "pipe:1",
     ]
-    process = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
-    return process.returncode == 0 and target.exists() and target.stat().st_size > 0
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if process.stdout is None:
+        return None, 0
+
+    frames = []
+    observations: list[dict] = []
+    engine = ocr.make_ocr_engine()
+    try:
+        for sample_index in range(samples):
+            raw = _read_exact(process.stdout, frame_bytes)
+            if not raw:
+                break
+            if len(raw) != frame_bytes:
+                break
+            frame = np.frombuffer(raw, dtype=np.uint8).reshape((sample_height, sample_width, 3))
+            frames.append(frame)
+            crop_h = max(8, int(sample_height * top_ratio))
+            crop = frame[:crop_h, :]
+            result = engine(crop)
+            for text, score, box in ocr.result_items(result):
+                text = ocr.normalize_text(text)
+                if not text or score < min_conf or box is None or not getattr(box, "size", 0):
+                    continue
+                bx0 = float(np.min(box[:, 0])) / sample_width
+                bx1 = float(np.max(box[:, 0])) / sample_width
+                by0 = float(np.min(box[:, 1])) / sample_height
+                by1 = float(np.max(box[:, 1])) / sample_height
+                cx = (bx0 + bx1) / 2.0
+                if cx < 0.48:
+                    side = "left"
+                elif cx > 0.52:
+                    side = "right"
+                else:
+                    continue
+                observations.append({
+                    "sample": sample_index,
+                    "side": side,
+                    "region": [bx0, by0, max(0.002, bx1 - bx0), max(0.002, by1 - by0)],
+                    "text": text,
+                    "confidence": float(score),
+                })
+    finally:
+        try:
+            process.stdout.close()
+        except Exception:
+            pass
+        if process.poll() is None:
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+
+    detected = choose_persistent_region(observations, max(1, len(frames)))
+    if detected is None:
+        detected = _visual_fallback(frames, sample_width, sample_height)
+    return detected, len(frames)
 
 
 def detect(input_path: Path) -> dict | None:
@@ -264,17 +378,19 @@ def detect(input_path: Path) -> dict | None:
     if detected is not None or decoded_frames >= 3:
         return detected
 
-    if not env_bool("OCR_OVERLAY_BILIBILI_DECODE_PROXY", True):
+    # Backward compatibility: the old DECODE_PROXY switch now controls a direct
+    # ffmpeg raw-frame fallback instead of creating a full H.264 proxy on disk.
+    fallback_enabled = env_bool(
+        "OCR_OVERLAY_BILIBILI_FFMPEG_FALLBACK",
+        env_bool("OCR_OVERLAY_BILIBILI_DECODE_PROXY", True),
+    )
+    if not fallback_enabled:
         return None
     try:
-        with tempfile.TemporaryDirectory(prefix="videoget-brand-") as tmp:
-            proxy = Path(tmp) / "detect.mp4"
-            if not _proxy_for_detection(input_path, proxy):
-                return None
-            detected, _ = _detect_cv(proxy)
-            if detected is not None:
-                detected["decodeProxyUsed"] = True
-            return detected
+        detected, _ = _detect_ffmpeg(input_path)
+        if detected is not None:
+            detected["decodeMode"] = "ffmpeg_pipe"
+        return detected
     except Exception:
         return None
 

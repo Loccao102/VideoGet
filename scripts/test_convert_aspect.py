@@ -7,6 +7,8 @@ from pathlib import Path
 
 
 SOURCE = Path(__file__).with_name("convert_aspect.py")
+SUBTITLE_RENDERER = Path(__file__).with_name("render_subtitles.py")
+OCR_MUSIC = Path(__file__).with_name("localize_ocr_music.py")
 SPEC = importlib.util.spec_from_file_location("convert_aspect", SOURCE)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader
@@ -23,6 +25,14 @@ class ConvertAspectTests(unittest.TestCase):
         self.assertEqual((width, height), (810, 1080))
         self.assertEqual(y, 0)
         self.assertGreater(x, 0)
+
+    def test_standard_subtitle_renderer_handles_aspect_in_same_filter_graph(self) -> None:
+        renderer = SUBTITLE_RENDERER.read_text(encoding="utf-8")
+        ocr_music = OCR_MUSIC.read_text(encoding="utf-8")
+        self.assertIn("def append_aspect_filter(", renderer)
+        self.assertIn('parser.add_argument("--aspect", default="original")', renderer)
+        self.assertIn('subtitles=\'{escaped}\'[subbed]', renderer)
+        self.assertIn('render_subtitles.render(input_path, subtitle_path, output_path, aspect=aspect)', ocr_music)
 
     def test_targets_include_social_ratios(self) -> None:
         self.assertEqual(MODULE.TARGETS["3:4"], (1080, 1440))

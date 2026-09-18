@@ -21,6 +21,7 @@ sys.modules.setdefault("smart_render", smart_stub)
 
 MODULE_PATH = Path(__file__).with_name("render_ocr_overlay.py")
 LOCALIZER_PATH = Path(__file__).with_name("localize_ocr_subtitles.py")
+BASE_LOCALIZE_PATH = Path(__file__).with_name("localize.py")
 spec = importlib.util.spec_from_file_location("render_ocr_overlay_tested", MODULE_PATH)
 overlay = importlib.util.module_from_spec(spec)
 assert spec and spec.loader
@@ -129,9 +130,13 @@ class OCROverlayStyleTests(unittest.TestCase):
         self.assertEqual(mode, "crop")
         self.assertTrue(any("[subbed]crop=810:1080" in value for value in filters))
 
-    def test_audio_is_stream_copied_in_ocr_subtitle_render(self) -> None:
+    def test_audio_copy_is_guarded_by_mp4_codec_compatibility(self) -> None:
         source = MODULE_PATH.read_text(encoding="utf-8")
-        self.assertIn('cmd += ["-map", "0:a:0", "-c:a", "copy"]', source)
+        base_source = BASE_LOCALIZE_PATH.read_text(encoding="utf-8")
+        self.assertIn('cmd += ["-map", "0:a:0"]', source)
+        self.assertIn("base.mp4_audio_codec_args(input_path)", source)
+        self.assertIn('{"aac", "mp3", "alac", "ac3", "eac3"}', base_source)
+        self.assertIn('return ["-c:a", "aac", "-b:a", bitrate]', base_source)
         self.assertIn("OCR_RENDER_CRF", source)
 
 

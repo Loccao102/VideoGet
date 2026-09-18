@@ -577,7 +577,7 @@ def render_ocr_subtitles(
             os.environ["VIDEO_CLEANUP_MODE"] = "legacy"
             os.environ["VIDEO_SOURCE_SUBTITLE_REGION"] = ",".join(f"{value:.5f}" for value in text_region)
             os.environ["VIDEO_CLEANUP_LOGOS"] = "false"
-        render_subtitles.render(input_path, subtitle_path, output_path)
+        render_subtitles.render(input_path, subtitle_path, output_path, aspect=aspect)
     finally:
         for key, value in previous.items():
             if value is None:
