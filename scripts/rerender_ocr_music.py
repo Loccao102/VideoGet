@@ -89,6 +89,7 @@ def main() -> None:
     parser.add_argument("--input", required=True)
     parser.add_argument("--subtitle", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--aspect", default="original")
     args = parser.parse_args()
 
     input_path = Path(args.input).resolve()
@@ -110,17 +111,20 @@ def main() -> None:
     if duration <= 0:
         duration = probe_duration(input_path)
     platform = infer_platform(input_path, metadata)
+    aspect = args.aspect.strip().lower() or "original"
 
     with tempfile.TemporaryDirectory(prefix="videoget-ocr-rerender-") as temp:
         subbed = Path(temp) / "ocr-subbed.mp4"
         if meta_path.is_file():
             try:
-                render_ocr_overlay.render(input_path, subtitle_path, meta_path, subbed, platform)
+                render_ocr_overlay.render(
+                    input_path, subtitle_path, meta_path, subbed, platform, aspect=aspect
+                )
             except Exception as error:
                 base.log(f"OCR+Music overlay re-render failed; falling back to legacy render: {error}")
-                ocr.render_ocr_subtitles(input_path, subtitle_path, subbed, text_region)
+                ocr.render_ocr_subtitles(input_path, subtitle_path, subbed, text_region, None, aspect)
         else:
-            ocr.render_ocr_subtitles(input_path, subtitle_path, subbed, text_region)
+            ocr.render_ocr_subtitles(input_path, subtitle_path, subbed, text_region, None, aspect)
         ocr.mix_music(subbed, music, output_path, duration)
 
     if not output_path.is_file() or output_path.stat().st_size <= 0:
