@@ -146,7 +146,7 @@ func (m *Manager) failOptionalRender(id string, previous Job, err error) {
 		})
 		return
 	}
-	m.failOptionalRender(id, previous, err)
+	m.fail(id, JobLocalizationFailed, err)
 }
 
 func normalizeOCRRenderStyle(style string) (string, bool) {
