@@ -52,6 +52,19 @@ class OCRDecodeProxySourceTests(unittest.TestCase):
         self.assertIn('original_region.lower() in {"", "auto"}', source)
 
 
+    def test_proxy_is_downscaled_and_frame_rate_limited(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+        self.assertIn("OCR_DECODE_PROXY_MAX_WIDTH", source)
+        self.assertIn("OCR_DECODE_PROXY_FPS", source)
+        self.assertIn("fast_bilinear", source)
+        self.assertIn("fps={proxy_fps:g}", source)
+
+    def test_bilibili_detection_reuses_ocr_input(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+        self.assertIn("bilibili_brand.detect(ocr_input)", source)
+        self.assertIn('"bilibiliBrand": brand_detection', source)
+
+
     def test_threads_comparison_is_numeric(self) -> None:
         comparisons = [
             node.test
