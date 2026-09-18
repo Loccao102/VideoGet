@@ -266,8 +266,13 @@ func (m *Manager) runSubtitleRender(id, style, overlayStyle string, previous Job
 		)
 		aspectHandledInRender = true
 	} else if job.ProcessingMode == ProcessingOCRMusic {
-		output = filepath.Join(outputDir, fmt.Sprintf("%s.ocr-music-r%d.mp4", stem, revision))
-		err = m.localizer.RenderOCRMusicSubtitles(ctx, job.SourceOutput, subtitle, output)
+		aspectPart := ""
+		if job.OutputAspect != OutputAspectOriginal {
+			aspectPart = ".aspect-" + aspectSuffix(job.OutputAspect)
+		}
+		output = filepath.Join(outputDir, fmt.Sprintf("%s.ocr-music-r%d%s.mp4", stem, revision, aspectPart))
+		err = m.localizer.RenderOCRMusicSubtitlesWithAspect(ctx, job.SourceOutput, subtitle, output, job.OutputAspect)
+		aspectHandledInRender = true
 	} else {
 		output = filepath.Join(outputDir, fmt.Sprintf("%s.vi-subbed-r%d.mp4", stem, revision))
 		err = m.localizer.RenderSubtitles(ctx, job.SourceOutput, subtitle, output)
