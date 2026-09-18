@@ -18,6 +18,7 @@ const (
 	SubtitleRenderStandard   = "standard"
 	SubtitleRenderOCROverlay = "ocr_overlay" // backwards-compatible alias for clean
 	SubtitleRenderOCRClean   = "ocr_clean"
+	SubtitleRenderOCRInpaint = "ocr_inpaint"
 	SubtitleRenderOCRCapsule = "ocr_capsule"
 	SubtitleRenderOCRBox     = "ocr_box"
 )
@@ -124,6 +125,8 @@ func normalizeOCRRenderStyle(style string) (string, bool) {
 	switch style {
 	case SubtitleRenderOCROverlay, SubtitleRenderOCRClean:
 		return "clean", true
+	case SubtitleRenderOCRInpaint:
+		return "inpaint", true
 	case SubtitleRenderOCRCapsule:
 		return "capsule", true
 	case SubtitleRenderOCRBox:
