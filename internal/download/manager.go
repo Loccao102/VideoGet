@@ -106,7 +106,7 @@ func NewManager(downloadDir string) (*Manager, error) {
 		job.ProcessingMode = normalizeProcessingMode(job.ProcessingMode)
 		job.OutputAspect = normalizeOutputAspect(job.OutputAspect)
 		switch job.Status {
-		case JobQueued, JobDownloading, JobLocalizing, JobRendering, JobAspectRendering:
+		case JobQueued, JobDownloading, JobLocalizing, JobRendering:
 			job.Status = JobQueued
 			job.UpdatedAt = time.Now().UTC()
 			resume = append(resume, job.ID)
@@ -207,7 +207,7 @@ func (m *Manager) Retry(id string) (Job, error) {
 		return Job{}, fmt.Errorf("job not found")
 	}
 	switch job.Status {
-	case JobQueued, JobDownloading, JobLocalizing, JobRendering:
+	case JobQueued, JobDownloading, JobLocalizing, JobRendering, JobAspectRendering:
 		m.mu.Unlock()
 		return Job{}, fmt.Errorf("job is already running")
 	case JobDone:
