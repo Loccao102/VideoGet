@@ -203,6 +203,24 @@ Khoảng trống tối đa giữa hai observation để còn coi chúng là cùn
 
 Low dùng gap lớn hơn vì FPS thấp hơn. High dùng gap nhỏ hơn vì sampling dày hơn.
 
+## OCR recovery khi lần đầu không tìm thấy subtitle
+
+Nếu `OCR_SUBTITLE_REGION=auto` và pass đầu tiên trả về **0 timed segment**, VideoGet chạy đúng **một** recovery pass:
+
+```env
+OCR_RETRY_ON_EMPTY=true
+OCR_RETRY_REGION=0.02,0.20,0.96,0.78
+OCR_RETRY_MIN_CONFIDENCE=0.52   # Low
+# 0.54 ở Medium / default
+# 0.56 ở High
+```
+
+Recovery mở rộng ROI lên gần toàn bộ phần nội dung video và hạ confidence nhẹ để cứu các video có caption nằm ngoài vùng analyzer dự đoán. Nó chỉ chạy khi pass đầu tiên ra 0 segment, nên video bình thường không bị chậm gấp đôi.
+
+Nếu người dùng đã đặt `OCR_SUBTITLE_REGION=x,y,w,h` thủ công, recovery **không ghi đè** vùng đó.
+
+Ngoài ra face detection trong layout analyzer là best-effort. Nếu bản OpenCV/headless không có `CascadeClassifier`, VideoGet bỏ qua face protection nhưng vẫn tiếp tục phân tích subtitle/watermark thay vì làm hỏng toàn bộ layout analysis.
+
 ---
 
 # 5. Bilibili watermark / branding
