@@ -347,6 +347,8 @@ def render(
                     source_blur,
                     enable,
                     source_blur_power,
+                    width,
+                    height,
                 )
                 cleanup_index += 1
 
