@@ -637,11 +637,19 @@ def main() -> None:
     music_started = time.perf_counter()
     mix_music(subbed_video, music, output_video, float(video_info["duration"]))
     timings["music"] = round(time.perf_counter() - music_started, 3)
+    # subbed_video is only an intermediate container. Its video stream has already
+    # been copied into output_video, so keeping both doubles disk usage for no benefit.
+    if subbed_video != output_video and not env_bool("OCR_KEEP_SUBBED_INTERMEDIATE", False):
+        try:
+            subbed_video.unlink(missing_ok=True)
+        except OSError as error:
+            base.log(f"Could not remove OCR+Music intermediate: {error}")
     timings["total"] = round(time.perf_counter() - started, 3)
 
     metadata = {
         "input": str(input_path),
         "mode": "ocr_music",
+        "outputAspect": args.aspect.strip().lower() or "original",
         "detectedLanguage": os.getenv("OCR_SOURCE_LANGUAGE", "zh"),
         "segments": segments,
         "originalSubtitle": str(original_srt),
