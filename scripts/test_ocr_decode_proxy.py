@@ -1,84 +1,59 @@
 #!/usr/bin/env python3
-"""Dependency-free regression checks for the OCR decode proxy command builder.
+"""Dependency-free regressions for direct ffmpeg OCR sampling.
 
-This intentionally inspects the source AST instead of importing the OCR module so CI
-can run it without installing OpenCV/RapidOCR. It guards the exact runtime regression
-where the thread count was converted to str before being compared with integer zero.
+The OCR path must not create a full-video H.264 compatibility proxy just so
+OpenCV can seek AV1 frames. FFmpeg now decodes sampled frames directly to a
+raw-video pipe and OCR captures geometry during that same pass.
 """
 from __future__ import annotations
 
-import ast
 import unittest
 from pathlib import Path
 
 
-SOURCE = Path(__file__).with_name("localize_ocr_subtitles.py")
+OCR_SOURCE = Path(__file__).with_name("localize_ocr_music.py")
+SUBTITLE_SOURCE = Path(__file__).with_name("localize_ocr_subtitles.py")
 
 
-class OCRDecodeProxySourceTests(unittest.TestCase):
+class OCRDirectDecodeSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
-        cls.prepare = next(
-            node
-            for node in cls.tree.body
-            if isinstance(node, ast.FunctionDef) and node.name == "prepare_ocr_input"
-        )
+        cls.ocr = OCR_SOURCE.read_text(encoding="utf-8")
+        cls.subtitles = SUBTITLE_SOURCE.read_text(encoding="utf-8")
 
-    def test_threads_stays_numeric_until_ffmpeg_args(self) -> None:
-        assignments = [
-            node
-            for node in ast.walk(self.prepare)
-            if isinstance(node, ast.Assign)
-            and any(isinstance(target, ast.Name) and target.id == "threads" for target in node.targets)
-        ]
-        self.assertEqual(len(assignments), 1)
-        value = assignments[0].value
-        self.assertIsInstance(value, ast.Call)
-        self.assertIsInstance(value.func, ast.Attribute)
-        self.assertIsInstance(value.func.value, ast.Name)
-        self.assertEqual(value.func.value.id, "ocr")
-        self.assertEqual(value.func.attr, "env_int")
+    def test_ocr_uses_ffmpeg_rawvideo_pipe(self) -> None:
+        self.assertIn('"ffmpeg", "-v", "error", "-hwaccel", "none"', self.ocr)
+        self.assertIn('"-pix_fmt", "bgr24", "-f", "rawvideo", "pipe:1"', self.ocr)
+        self.assertIn("subprocess.Popen(cmd, stdout=subprocess.PIPE", self.ocr)
+
+    def test_direct_sampling_does_not_downscale_ocr_frames(self) -> None:
+        # The direct OCR command only applies fps sampling; source resolution is
+        # retained so this optimization does not trade OCR accuracy for speed.
+        self.assertIn('"-vf", f"fps={ocr_fps:g}"', self.ocr)
+        direct_block = self.ocr[self.ocr.index('cmd = [\n        "ffmpeg"'):self.ocr.index("process = subprocess.Popen", self.ocr.index('cmd = [\n        "ffmpeg"'))]
+        self.assertNotIn("scale=", direct_block)
+
+    def test_geometry_is_captured_during_same_ocr_pass(self) -> None:
+        self.assertIn('segment["bboxRegions"] = details', self.ocr)
+        self.assertIn('segment["bbox"] = bbox', self.ocr)
+        self.assertIn("_apply_geometry(current, boxes)", self.ocr)
+
+    def test_subtitle_mode_no_longer_builds_proxy_or_second_bbox_pass(self) -> None:
+        main_start = self.subtitles.index("def main()")
+        main_source = self.subtitles[main_start:]
+        self.assertNotIn("prepare_ocr_input(", main_source)
+        self.assertNotIn("ocr_segment_regions.attach_segment_bboxes(", main_source)
+        self.assertIn("ocr.extract_segments(input_path, output_dir)", main_source)
+        self.assertIn('bbox_attached = sum(1 for segment in segments if segment.get("bbox"))', main_source)
 
     def test_empty_ocr_has_one_automatic_recovery_pass(self) -> None:
-        source = SOURCE.read_text(encoding="utf-8")
-        self.assertIn("OCR_RETRY_ON_EMPTY", source)
-        self.assertIn("OCR_RETRY_REGION", source)
-        self.assertIn("OCR_RETRY_MIN_CONFIDENCE", source)
-        self.assertIn("OCR first pass found 0 timed segments; retrying once", source)
+        self.assertIn("OCR_RETRY_ON_EMPTY", self.subtitles)
+        self.assertIn("OCR_RETRY_REGION", self.subtitles)
+        self.assertIn("OCR_RETRY_MIN_CONFIDENCE", self.subtitles)
+        self.assertIn("OCR first pass found 0 timed segments; retrying once", self.subtitles)
 
     def test_manual_ocr_region_is_not_overridden(self) -> None:
-        source = SOURCE.read_text(encoding="utf-8")
-        self.assertIn('original_region.lower() in {"", "auto"}', source)
-
-
-    def test_proxy_is_downscaled_and_frame_rate_limited(self) -> None:
-        source = SOURCE.read_text(encoding="utf-8")
-        self.assertIn("OCR_DECODE_PROXY_MAX_WIDTH", source)
-        self.assertIn("OCR_DECODE_PROXY_FPS", source)
-        self.assertIn("fast_bilinear", source)
-        self.assertIn("fps={proxy_fps:g}", source)
-
-    def test_bilibili_detection_reuses_ocr_input(self) -> None:
-        source = SOURCE.read_text(encoding="utf-8")
-        self.assertIn("bilibili_brand.detect(ocr_input)", source)
-        self.assertIn('"bilibiliBrand": brand_detection', source)
-
-
-    def test_threads_comparison_is_numeric(self) -> None:
-        comparisons = [
-            node.test
-            for node in ast.walk(self.prepare)
-            if isinstance(node, ast.If)
-            and isinstance(node.test, ast.Compare)
-            and isinstance(node.test.left, ast.Name)
-            and node.test.left.id == "threads"
-        ]
-        self.assertTrue(comparisons, "expected numeric threads guard")
-        comparison = comparisons[0]
-        self.assertIsInstance(comparison.ops[0], ast.Gt)
-        self.assertIsInstance(comparison.comparators[0], ast.Constant)
-        self.assertEqual(comparison.comparators[0].value, 0)
+        self.assertIn('original_region.lower() in {"", "auto"}', self.subtitles)
 
 
 if __name__ == "__main__":
