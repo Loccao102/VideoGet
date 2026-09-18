@@ -96,8 +96,14 @@ func completedAspectBase(job Job) string {
 			return candidate
 		}
 	}
-	if reusableMedia(job.Output) {
+	// Only use the current output directly when it is already the unmodified
+	// completed aspect. Re-encoding from a previous crop/blur derivative would
+	// unnecessarily lose quality and can compound framing changes.
+	if job.OutputAspect == OutputAspectOriginal && reusableMedia(job.Output) {
 		return job.Output
+	}
+	if job.OutputAspect == OutputAspectOriginal && job.Localization != nil && reusableMedia(job.Localization.OutputVideo) {
+		return job.Localization.OutputVideo
 	}
 	return ""
 }
