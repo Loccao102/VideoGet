@@ -13,6 +13,14 @@ import (
 // RenderOCRMusicSubtitles burns an edited OCR-generated Vietnamese SRT and
 // reconstructs the same music mix without rerunning OCR, translation, Whisper or TTS.
 func (p *Processor) RenderOCRMusicSubtitles(ctx context.Context, input, subtitle, output string) error {
+	return p.RenderOCRMusicSubtitlesWithAspect(ctx, input, subtitle, output, "original")
+}
+
+func (p *Processor) RenderOCRMusicSubtitlesWithAspect(ctx context.Context, input, subtitle, output, aspect string) error {
+	aspect = strings.ToLower(strings.TrimSpace(aspect))
+	if aspect == "" {
+		aspect = "original"
+	}
 	if strings.TrimSpace(input) == "" || strings.TrimSpace(subtitle) == "" || strings.TrimSpace(output) == "" {
 		return fmt.Errorf("input, subtitle and output paths are required")
 	}
@@ -50,6 +58,7 @@ func (p *Processor) RenderOCRMusicSubtitles(ctx context.Context, input, subtitle
 		"--input", input,
 		"--subtitle", subtitle,
 		"--output", output,
+		"--aspect", aspect,
 	)
 	cmd.Env = os.Environ()
 	var stderr bytes.Buffer
