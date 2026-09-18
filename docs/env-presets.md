@@ -397,7 +397,67 @@ Không ảnh hưởng mode OCR-only.
 
 ---
 
-# 10. Final render
+# 10. Tỉ lệ output social
+
+Mỗi job có thể chọn tỉ lệ output độc lập:
+
+```text
+original
+16:9
+3:4
+9:16
+1:1
+```
+
+UI mặc định chọn `3:4`, còn API cũ nếu không truyền `aspect` vẫn giữ nguyên source để tương thích ngược.
+
+Video gốc luôn được giữ ở `SourceOutput`. Bước đổi tỉ lệ chỉ chạy **sau khi download/localization/render hoàn tất**, vì vậy retry OCR/subtitle vẫn sử dụng source gốc và không bị encode chồng nhiều lần.
+
+## `ASPECT_CONVERT_MODE`
+
+```env
+ASPECT_CONVERT_MODE=auto
+```
+
+- `auto`: crop giữa nếu vẫn giữ đủ phần khung nguồn, nếu không thì blur-fill.
+- `crop`: luôn crop vào target.
+- `blur_fill`: luôn giữ toàn bộ frame và lấp phần thiếu bằng background blur.
+
+## `ASPECT_CROP_MIN_RETAIN`
+
+```env
+ASPECT_CROP_MIN_RETAIN=0.40
+```
+
+Đây là tỉ lệ khung tối thiểu phải giữ được để `auto` cho phép crop.
+
+Ví dụ:
+
+```text
+16:9 -> 3:4  giữ khoảng 42.2% chiều ngang -> crop
+16:9 -> 9:16 giữ khoảng 31.6% chiều ngang -> blur-fill
+```
+
+Tăng lên `0.50-0.60` nếu muốn bảo thủ hơn và ưu tiên giữ toàn bộ cảnh.
+
+## `ASPECT_OUTPUT_CRF`
+
+Mặc định `18` để derivative social hạn chế suy giảm chất lượng sau một lần encode thêm. `ASPECT_OUTPUT_PRESET` để trống sẽ kế thừa `VIDEO_PRESET` của tier hiện tại.
+
+## Target resolution
+
+```text
+16:9 -> 1920x1080
+3:4  -> 1080x1440
+9:16 -> 1080x1920
+1:1  -> 1080x1080
+```
+
+Nếu source đã đúng tỉ lệ target, VideoGet copy file thay vì re-encode chỉ để đổi resolution.
+
+---
+
+# 11. Final render
 
 ## `VIDEO_PRESET`
 
@@ -446,7 +506,7 @@ Không nhầm với `OCR_FPS`; biến này chỉ dùng visual analysis.
 
 ---
 
-# 11. Nếu máy vẫn chậm thì giảm theo thứ tự nào?
+# 12. Nếu máy vẫn chậm thì giảm theo thứ tự nào?
 
 ## CPU 95-100% liên tục
 
@@ -508,7 +568,7 @@ Kiểm tra log có dòng compatibility proxy. Nếu có, bottleneck là AV1 → 
 
 ---
 
-# 12. Lưu ý về Docker Desktop
+# 13. Lưu ý về Docker Desktop
 
 Trên Windows, tổng RAM/CPU thực tế còn phải chia cho:
 
@@ -526,7 +586,7 @@ Nếu Docker Desktop bị giới hạn CPU/RAM thấp hơn máy thật, preset H
 
 ---
 
-# 13. Khi đổi preset
+# 14. Khi đổi preset
 
 Chỉ thay env:
 
