@@ -136,7 +136,7 @@ func (m *Manager) RenderAspectVariant(id, aspect string) (Job, error) {
 	}
 
 	m.update(id, func(current *Job) {
-		current.Status = JobRendering
+		current.Status = JobAspectRendering
 		current.Error = ""
 		current.UpdatedAt = time.Now().UTC()
 	})
