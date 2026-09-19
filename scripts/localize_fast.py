@@ -101,6 +101,71 @@ def translation_prompt(batch: list[dict], detected_language: str) -> str:
     )
 
 
+def _normalize_translation_response(parsed, batch: list[dict]) -> list[dict]:
+    """Normalize loose LLM JSON into the stable [{id, text}] schema used downstream."""
+    if isinstance(parsed, dict):
+        if "translations" in parsed:
+            payload = parsed.get("translations")
+        elif "id" in parsed:
+            payload = [parsed]
+        else:
+            payload = None
+    else:
+        payload = parsed
+
+    if isinstance(payload, str):
+        if len(batch) != 1:
+            raise RuntimeError(
+                f"translation response returned one string for batch of {len(batch)} segments"
+            )
+        payload = [payload]
+    elif isinstance(payload, dict):
+        payload = [payload]
+
+    if not isinstance(payload, list):
+        raise RuntimeError(
+            f"translation response must contain a list, got {type(payload).__name__}"
+        )
+
+    normalized: list[dict] = []
+    can_use_position = len(payload) == len(batch)
+
+    for index, raw in enumerate(payload):
+        if isinstance(raw, str):
+            if not can_use_position:
+                raise RuntimeError(
+                    "translation response contains strings without ids and item count does not match batch"
+                )
+            text = raw.strip()
+            if text:
+                normalized.append({"id": int(batch[index]["id"]), "text": text})
+            continue
+
+        if not isinstance(raw, dict):
+            raise RuntimeError(
+                f"translation item must be object or string, got {type(raw).__name__}"
+            )
+
+        item_id = raw.get("id")
+        if item_id is None and can_use_position:
+            item_id = batch[index].get("id")
+        if item_id is None:
+            raise RuntimeError("translation item is missing id")
+
+        text = raw.get("text")
+        if text is None:
+            text = raw.get("vi")
+        if text is None:
+            text = raw.get("translation")
+        text = str(text or "").strip()
+        if text:
+            normalized.append({"id": int(item_id), "text": text})
+
+    if not normalized:
+        raise RuntimeError("translation response contained no usable translations")
+    return normalized
+
+
 def translate_batch_ollama(batch: list[dict], detected_language: str) -> list[dict]:
     payload = {
         "model": os.getenv("OLLAMA_MODEL", "qwen3:8b"),
@@ -126,7 +191,7 @@ def translate_batch_ollama(batch: list[dict], detected_language: str) -> list[di
     )
     content = response.get("message", {}).get("content", "")
     parsed = base.extract_json(content)
-    return parsed.get("translations", [])
+    return _normalize_translation_response(parsed, batch)
 
 
 def translate_batch_openai(batch: list[dict], detected_language: str) -> list[dict]:
@@ -156,7 +221,7 @@ def translate_batch_openai(batch: list[dict], detected_language: str) -> list[di
         raise RuntimeError("translation endpoint returned no choices")
     content = choices[0].get("message", {}).get("content", "")
     parsed = base.extract_json(content)
-    return parsed.get("translations", [])
+    return _normalize_translation_response(parsed, batch)
 
 
 def translate_once(batch: list[dict], language: str, provider: str) -> list[dict]:
