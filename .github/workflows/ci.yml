@@ -37,6 +37,8 @@ jobs:
         run: python scripts/test_bilibili_brand.py
       - name: OCR Vietnamese translation guard regression
         run: python scripts/test_translation_guard.py
+      - name: OCR translation recovery regression
+        run: python scripts/test_translation_recovery.py
       - run: >-
           python -m py_compile
           scripts/localize.py
@@ -62,6 +64,7 @@ jobs:
           scripts/test_bilibili_brand.py
           scripts/translation_guard.py
           scripts/test_translation_guard.py
+          scripts/test_translation_recovery.py
           scripts/rerender_ocr_music.py
           scripts/render_subtitles.py
           scripts/render_ocr_overlay.py
