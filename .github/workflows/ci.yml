@@ -35,6 +35,8 @@ jobs:
         run: python scripts/test_smart_blur.py
       - name: Bilibili brand side regression
         run: python scripts/test_bilibili_brand.py
+      - name: OCR Vietnamese translation guard regression
+        run: python scripts/test_translation_guard.py
       - run: >-
           python -m py_compile
           scripts/localize.py
@@ -58,6 +60,8 @@ jobs:
           scripts/test_ocr_overlay_regions.py
           scripts/test_smart_blur.py
           scripts/test_bilibili_brand.py
+          scripts/translation_guard.py
+          scripts/test_translation_guard.py
           scripts/rerender_ocr_music.py
           scripts/render_subtitles.py
           scripts/render_ocr_overlay.py

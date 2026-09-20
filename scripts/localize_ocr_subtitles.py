@@ -172,11 +172,17 @@ def main() -> None:
     base.write_srt(original_srt, segments, "text")
 
     translate_started = time.perf_counter()
-    if ocr.env_bool("OCR_TRANSLATE", True):
-        base.translate_segments(segments, os.getenv("OCR_SOURCE_LANGUAGE", "zh"))
-    else:
+    source_language = os.getenv("OCR_SOURCE_LANGUAGE", "zh").strip() or "zh"
+    if source_language.lower().startswith("vi"):
         for segment in segments:
             segment["vi"] = segment["text"]
+    else:
+        if not ocr.env_bool("OCR_TRANSLATE", True):
+            base.log(
+                "OCR_TRANSLATE=false ignored because OCR Vietnamese output requires "
+                f"translation from {source_language}."
+            )
+        base.translate_segments(segments, source_language)
     timings["translate"] = round(time.perf_counter() - translate_started, 3)
     base.write_srt(vi_srt, segments, "vi")
 
