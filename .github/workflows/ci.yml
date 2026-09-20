@@ -39,6 +39,10 @@ jobs:
         run: python scripts/test_translation_guard.py
       - name: OCR translation recovery regression
         run: python scripts/test_translation_recovery.py
+      - name: Adaptive OCR quality tier regression
+        run: python scripts/test_adaptive_quality_tiers.py
+      - name: OCR consensus quality regression
+        run: python scripts/test_ocr_quality.py
       - run: >-
           python -m py_compile
           scripts/localize.py
@@ -63,8 +67,11 @@ jobs:
           scripts/test_smart_blur.py
           scripts/test_bilibili_brand.py
           scripts/translation_guard.py
+          scripts/ocr_quality.py
           scripts/test_translation_guard.py
           scripts/test_translation_recovery.py
+          scripts/test_adaptive_quality_tiers.py
+          scripts/test_ocr_quality.py
           scripts/rerender_ocr_music.py
           scripts/render_subtitles.py
           scripts/render_ocr_overlay.py

@@ -6,11 +6,11 @@ VideoGet có 3 preset phần cứng rõ ràng. Mục tiêu của các preset là
 
 ## 1. Chọn preset theo máy
 
-| Tier | File | CPU logical threads | RAM | GPU | Storage | OCR | Ollama | Localization | Render |
-|---|---|---:|---:|---|---|---|---|---:|---|
-| **Yếu** | `.env.low.example` | 4-8 | 8-16 GB | Không cần | SSD nên có | `tiny`, 2 FPS | `qwen3:1.7b` | 1 | OCR single-pass, CRF 18 |
-| **Vừa** | `.env.medium.example` | 8-16 | 16-32 GB | Optional | SSD/NVMe | `small`, 3 FPS | `qwen3:4b` | 1 | `veryfast`, CRF 21 |
-| **Cao** | `.env.high.example` | 20-32+ | 32-64+ GB | Không bắt buộc; hữu ích cho Ollama | NVMe khuyến nghị | `medium`, 4 FPS | `qwen3:8b` | 2 | `fast`, CRF 20 |
+| Tier | File | CPU logical threads | RAM | OCR strategy | Dịch chính | Repair khi khó | Localization |
+|---|---|---:|---:|---|---|---|---:|
+| **Yếu** | `.env.low.example` | 4-8 | 8-16 GB | `tiny` 2 FPS → chỉ segment đáng ngờ dùng `small` | `qwen3:1.7b` | `qwen3:4b` | 1 |
+| **Vừa** | `.env.medium.example` | 8-16 | 16-32 GB | `small` 3 FPS → segment đáng ngờ dùng `medium` | `qwen3:4b` | `qwen3:8b` | 1 |
+| **Cao** | `.env.high.example` | 20-32+ | 32-64+ GB | `medium` 4 FPS + 5 mẫu refinement | `qwen3:8b` | `qwen3:8b` | 2 |
 
 `.env.example` hiện dùng cấu hình **Vừa / Balanced** vì đây là mức phù hợp nhất cho đa số máy dev hiện đại.
 
@@ -28,16 +28,22 @@ VideoGet có 3 preset phần cứng rõ ràng. Mục tiêu của các preset là
 ```powershell
 Copy-Item .env.low.example .env -Force
 ollama pull qwen3:1.7b
+ollama pull qwen3:4b
 docker compose up -d --build --force-recreate
 ```
+
+Model 4B chỉ dùng cho segment mà 1.7B dịch lỗi/echo tiếng Trung, không phải mọi batch.
 
 ### Vừa
 
 ```powershell
 Copy-Item .env.medium.example .env -Force
 ollama pull qwen3:4b
+ollama pull qwen3:8b
 docker compose up -d --build --force-recreate
 ```
+
+8B chỉ là repair model nên chi phí trung bình vẫn gần profile 4B.
 
 ### Cao
 
@@ -132,6 +138,61 @@ Preset:
 - High: `medium`
 
 Model lớn hơn có thể đọc text nhỏ/mờ tốt hơn nhưng tốn CPU/RAM hơn. Với video Bilibili/Douyin chữ rõ, `small` thường là điểm cân bằng tốt.
+
+## Adaptive quality thay vì hạ chất lượng toàn cục
+
+Cả ba tier dùng cùng một quality contract:
+
+```text
+first-pass OCR
+  -> multi-frame consensus
+  -> segment nào confidence/consensus thấp mới refinement
+  -> temporal cleanup envelope
+  -> cover chữ nguồn
+  -> contextual translation
+  -> repair model nếu output còn tiếng Trung
+```
+
+Điểm khác biệt chỉ là **bao nhiêu tài nguyên được dùng trước khi escalation**.
+
+Các biến chính:
+
+```env
+VIDEGET_QUALITY_TIER=low|medium|high
+OCR_CONSENSUS_SIMILARITY=...
+OCR_REFINEMENT_ENABLED=true
+OCR_REFINEMENT_MODEL_SIZE=...
+OCR_REFINEMENT_TRIGGER_CONFIDENCE=...
+OCR_REFINEMENT_TRIGGER_CONSENSUS=...
+OCR_REFINEMENT_MAX_SEGMENTS=...
+OCR_REFINEMENT_SAMPLES=...
+```
+
+Low không còn chịu cảnh "tiny đọc sai thì dịch sai luôn": tiny chỉ là first-pass; segment đáng ngờ được đọc lại bằng small. Medium dùng small -> medium. High dùng medium và tăng số frame refinement.
+
+### Multi-frame consensus
+
+Một frame OCR confidence cao không còn tự động thắng. VideoGet gom nhiều observation gần nhau, cluster theo độ giống text, rồi ưu tiên cụm xuất hiện trên nhiều frame.
+
+Ví dụ:
+
+```text
+frame 1: 渴死我了   0.76
+frame 2: 渴死我了   0.79
+frame 3: 谢谢我来这里 0.98
+```
+
+Kết quả consensus là `渴死我了`, không phải frame 3 chỉ vì confidence 0.98.
+
+### Selective refinement
+
+Chỉ segment có một trong các dấu hiệu sau mới tốn model lớn:
+
+- confidence thấp;
+- consensus thấp;
+- quá ít observation.
+
+Refinement dùng 1-5 frame nằm bên trong interval của segment. Nếu OpenCV không decode được AV1, VideoGet tự fallback sang FFmpeg frame decode; không tạo full-video proxy.
 
 ## `OCR_FPS`
 
@@ -251,20 +312,28 @@ OCR_OVERLAY_STYLE=clean
 - `capsule`: thêm nền mỏng bán trong suốt.
 - `box`: box đen kiểu cũ.
 
-### Tight OCR blur
+### Temporal cleanup envelope + cover
 
-Từ pipeline mới, OCR lưu thêm `bboxRegions` cho từng segment. Đây là các bbox nhỏ của từng detection/dòng chữ tại frame đại diện, tách khỏi `bbox` union dùng để đặt subtitle Việt.
-
-Do đó cleanup mới là:
+OCR vẫn giữ `bbox` cho placement, nhưng cleanup không còn lấy duy nhất bbox của một frame đại diện. Các box thuộc **consensus thắng** được gom qua nhiều frame thành `cleanupRegions[]`.
 
 ```text
-bbox union
-  -> chỉ dùng để đặt sub Việt
+bbox
+  -> placement subtitle Việt
 
-bboxRegions[]
-  -> blur riêng từng vùng chữ nguồn
-  -> không blur một khung lớn bao toàn bộ caption
+cleanupRegions[]
+  -> envelope ổn định qua nhiều frame
+  -> padding ăn hết outline/stroke chữ
+  -> cover nguồn trước khi vẽ sub Việt
 ```
+
+Mặc định:
+
+```env
+OCR_SOURCE_CLEANUP_MODE=cover
+OCR_SOURCE_CLEANUP_ALPHA=1.0
+```
+
+`cover` được chọn vì yêu cầu sản phẩm là **không còn đọc được chữ Trung**. `blur` và `hybrid` vẫn có thể bật thủ công nếu muốn giữ nền tự nhiên hơn, nhưng không có cùng guarantee.
 
 Medium/default:
 
@@ -321,13 +390,23 @@ Các biến `OCR_DECODE_PROXY_*` cũ có thể còn trong file `.env` local sau 
 
 ## `OLLAMA_MODEL`
 
-Preset:
+Primary model:
 
 ```text
 Low    → qwen3:1.7b
 Medium → qwen3:4b
 High   → qwen3:8b
 ```
+
+Repair model khi output còn tiếng Trung / guard fail:
+
+```text
+Low    → qwen3:4b
+Medium → qwen3:8b
+High   → qwen3:8b
+```
+
+Nhờ vậy máy yếu không phải chạy 4B cho mọi câu, nhưng cũng không chấp nhận chất lượng 1.7B ở các đoạn khó.
 
 Đây là một trong những bottleneck lớn nhất nếu Ollama chạy hoàn toàn bằng CPU.
 
@@ -341,7 +420,7 @@ Nếu translation chậm nhưng OCR nhanh:
 
 Số subtitle segment gửi trong một batch.
 
-- Low: 6
+- Low: 4
 - Medium: 8
 - High: 12
 
@@ -352,8 +431,8 @@ Batch lớn giảm overhead request/model nhưng cần nhiều RAM/context hơn.
 Số segment lân cận dùng làm ngữ cảnh để dịch tự nhiên hơn.
 
 - Low: 2
-- Medium: 3
-- High: 4
+- Medium: 4
+- High: 5
 
 Tăng context không làm OCR tốt hơn; nó chỉ giúp dịch có ngữ cảnh hơn và làm prompt lớn hơn.
 

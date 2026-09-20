@@ -137,6 +137,12 @@ def metadata_segments(metadata: dict) -> list[dict]:
                 detail_regions.append(normalize_region(detail, pad=False))
             except (TypeError, ValueError):
                 continue
+        cleanup_regions = []
+        for detail in raw.get("cleanupRegions") or raw.get("bboxRegions") or []:
+            try:
+                cleanup_regions.append(normalize_region(detail, pad=False))
+            except (TypeError, ValueError):
+                continue
         out.append({
             "start": start,
             "end": end,
@@ -144,6 +150,7 @@ def metadata_segments(metadata: dict) -> list[dict]:
             # Do not expand it a second time here.
             "bbox": normalize_region(raw.get("bbox"), pad=False),
             "regions": detail_regions,
+            "cleanupRegions": cleanup_regions,
             "placement": str(raw.get("placement", "")).strip().lower(),
             "confidence": float(raw.get("bboxConfidence", 0.0) or 0.0),
         })
@@ -181,7 +188,7 @@ def attach_regions(entries: list[dict], metadata: dict, fallback_region: tuple[f
 
         if best is not None:
             source_region = best["bbox"]
-            source_regions = best.get("regions") or [source_region]
+            source_regions = best.get("cleanupRegions") or best.get("regions") or [source_region]
             placement = best.get("placement", "")
             entry["bboxMatched"] = True
             entry["bboxConfidence"] = best.get("confidence", 0.0)
@@ -362,6 +369,10 @@ def render(
 
     source_blur = smart.env_int("OCR_OVERLAY_SOURCE_BLUR", 14, 2)
     source_blur_power = smart.env_int("OCR_OVERLAY_SOURCE_BLUR_POWER", 3, 1)
+    cleanup_mode = os.getenv("OCR_SOURCE_CLEANUP_MODE", "cover").strip().lower() or "cover"
+    if cleanup_mode not in {"cover", "blur", "hybrid"}:
+        raise RuntimeError("OCR_SOURCE_CLEANUP_MODE must be cover, blur, or hybrid")
+    cleanup_alpha = clamp(smart.env_float("OCR_SOURCE_CLEANUP_ALPHA", 1.0, 0.0), 0.0, 1.0)
     capsule_alpha = clamp(smart.env_float("OCR_OVERLAY_CAPSULE_ALPHA", 0.24, 0.0), 0.0, 1.0)
     box_alpha = clamp(smart.env_float("OCR_OVERLAY_BOTTOM_BOX_ALPHA", 0.88, 0.0), 0.0, 1.0)
     max_segments = smart.env_int("OCR_OVERLAY_MAX_SEGMENTS", 240, 10)
@@ -390,18 +401,35 @@ def render(
             # Prefer the tight OCR line/word regions. Older metadata falls back
             # to the single union bbox, but new jobs no longer blur one oversized block.
             for tight_region in source_regions:
-                video_label = smart.add_blur_region(
-                    filters,
-                    video_label,
-                    cleanup_index,
-                    tight_region,
-                    source_blur,
-                    enable,
-                    source_blur_power,
-                    width,
-                    height,
-                )
-                cleanup_index += 1
+                if cleanup_mode in {"blur", "hybrid"}:
+                    video_label = smart.add_blur_region(
+                        filters,
+                        video_label,
+                        cleanup_index,
+                        tight_region,
+                        source_blur,
+                        enable,
+                        source_blur_power,
+                        width,
+                        height,
+                    )
+                    cleanup_index += 1
+                if cleanup_mode in {"cover", "hybrid"}:
+                    tx, ty, tw, th = (
+                        float(tight_region["x"]),
+                        float(tight_region["y"]),
+                        float(tight_region["w"]),
+                        float(tight_region["h"]),
+                    )
+                    out = f"ocrclean{cleanup_index}"
+                    alpha = cleanup_alpha if cleanup_mode == "cover" else min(cleanup_alpha, 0.72)
+                    filters.append(
+                        f"[{video_label}]drawbox=x=iw*{tx:.5f}:y=ih*{ty:.5f}:"
+                        f"w=iw*{tw:.5f}:h=ih*{th:.5f}:"
+                        f"color=black@{alpha:.3f}:t=fill:enable='{enable}'[{out}]"
+                    )
+                    video_label = out
+                    cleanup_index += 1
 
             if render_style == "capsule":
                 out = f"ocrcapsule{cleanup_index}"
@@ -472,7 +500,8 @@ def render(
         metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
     base.log(
         f"OCR overlay render: style={render_style}, platform={platform or 'unknown'}, "
-        f"segment bbox matched={matched}/{len(entries)}, sourceBlur={source_blur}x{source_blur_power}, "
+        f"segment bbox matched={matched}/{len(entries)}, cleanup={cleanup_mode}@{cleanup_alpha:.2f}, "
+        f"sourceBlur={source_blur}x{source_blur_power}, "
         f"brandSide={brand_side or 'none'}, "
         f"brandDetect={(brand_detection or {}).get('source', 'none')}, "
         f"aspect={metadata['outputAspect']}({aspect_mode}), "

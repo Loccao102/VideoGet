@@ -78,6 +78,8 @@ def translation_signature(transcript_signature: dict) -> dict:
         "contextSegments": env_int("TRANSLATE_CONTEXT_SEGMENTS", 3, 0),
         "batchSize": env_int("TRANSLATE_BATCH_SIZE", 10, 1),
         "temperature": os.getenv("TRANSLATE_TEMPERATURE", "0.15"),
+        "repairOnHan": env_bool("TRANSLATE_REPAIR_ON_HAN", True),
+        "repairModel": os.getenv("TRANSLATE_REPAIR_MODEL", "").strip(),
     }
 
 
