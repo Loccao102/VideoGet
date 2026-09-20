@@ -84,6 +84,19 @@ transcript cache hit
  -> render lại
 ```
 
+### Adaptive OCR quality
+
+OCR không còn giảm chất lượng tuyến tính theo cấu hình máy. Cả 3 preset dùng cùng quality contract:
+
+- nhiều frame cùng đọc một câu sẽ vote bằng **multi-frame consensus**; một frame confidence cao nhưng đọc lệch không tự động thắng;
+- chỉ segment confidence/consensus thấp mới chạy **OCR refinement** bằng model lớn hơn;
+- Low dùng `tiny -> small`, Medium dùng `small -> medium`, High dùng `medium` với nhiều sample hơn;
+- refinement AV1 fallback sang FFmpeg frame decode, không tạo full-video proxy;
+- cleanup dùng `cleanupRegions` gom qua nhiều frame và mặc định `cover` để chữ Trung không còn đọc được;
+- nếu model dịch chính echo tiếng Trung, chỉ segment lỗi được đẩy sang repair model mạnh hơn.
+
+Nhờ đó Low tiết kiệm tài nguyên ở các đoạn dễ thay vì chấp nhận output kém ở các đoạn khó.
+
 ### Final render
 - Giữ file `.srt` để chỉnh sửa/re-render.
 - Tạo `*.vi-dubbed.mp4` đã burn subtitle Việt trực tiếp vào video.
@@ -125,11 +138,11 @@ Khi VideoGet khởi động lại:
 
 VideoGet có 3 cấu hình phần cứng:
 
-| Tier | File | CPU logical threads | RAM | OCR | Ollama |
+| Tier | File | CPU logical threads | RAM | OCR | Dịch |
 |---|---|---:|---:|---|---|
-| Yếu | `.env.low.example` | 4-8 | 8-16 GB | tiny / 2 FPS | qwen3:1.7b |
-| Vừa / mặc định | `.env.medium.example` hoặc `.env.example` | 8-16 | 16-32 GB | small / 3 FPS | qwen3:4b |
-| Cao / workstation | `.env.high.example` | 20-32+ | 32-64+ GB | medium / 4 FPS | qwen3:8b |
+| Yếu | `.env.low.example` | 4-8 | 8-16 GB | tiny / 2 FPS → selective small | qwen3:1.7b → repair 4b |
+| Vừa / mặc định | `.env.medium.example` hoặc `.env.example` | 8-16 | 16-32 GB | small / 3 FPS → selective medium | qwen3:4b → repair 8b |
+| Cao / workstation | `.env.high.example` | 20-32+ | 32-64+ GB | medium / 4 FPS + dense refinement | qwen3:8b |
 
 Chi tiết cách chọn máy, ý nghĩa `LOCALIZE_CONCURRENCY`, `OCR_FPS`, `OCR_MODEL_SIZE`, Ollama, Whisper, AV1 proxy và render nằm tại [docs/env-presets.md](docs/env-presets.md).
 
