@@ -574,9 +574,147 @@ def extract_segments(input_path: Path, output_dir: Path) -> tuple[list[dict], li
         "sampleCount": sampled,
         "region": region,
         "decodeMode": "ffmpeg_pipe",
+        "qualityTier": os.getenv("VIDEGET_QUALITY_TIER", "medium").strip().lower() or "medium",
         "segmentBBoxCount": sum(1 for segment in segments if segment.get("bbox")),
     }
+    refined = refine_uncertain_segments(input_path, segments, info)
+    info["refinedSegments"] = refined
     return segments, observed_boxes, info
+
+
+def _segment_sample_times(start: float, end: float, count: int) -> list[float]:
+    if end <= start:
+        return [max(0.0, start)]
+    ratios = {
+        1: [0.50],
+        2: [0.33, 0.67],
+        3: [0.22, 0.50, 0.78],
+        4: [0.16, 0.38, 0.62, 0.84],
+        5: [0.12, 0.31, 0.50, 0.69, 0.88],
+    }
+    selected = ratios.get(max(1, min(5, count)), ratios[3])
+    duration = end - start
+    return [start + duration * ratio for ratio in selected]
+
+
+def refine_uncertain_segments(input_path: Path, segments: list[dict], video_info: dict) -> int:
+    """Spend heavier OCR only on uncertain segments so Low tier can still protect quality."""
+    if not segments or not env_bool("OCR_REFINEMENT_ENABLED", True):
+        return 0
+
+    min_confidence = env_float("OCR_REFINEMENT_TRIGGER_CONFIDENCE", 0.72, 0.0)
+    min_consensus = env_float("OCR_REFINEMENT_TRIGGER_CONSENSUS", 0.67, 0.0)
+    min_observations = env_int("OCR_REFINEMENT_TRIGGER_OBSERVATIONS", 2, 1)
+    max_segments = env_int("OCR_REFINEMENT_MAX_SEGMENTS", 16, 1)
+    candidates = [
+        segment for segment in segments
+        if ocr_quality.needs_refinement(
+            segment,
+            min_confidence=min_confidence,
+            min_consensus=min_consensus,
+            min_observations=min_observations,
+        )
+    ][:max_segments]
+    if not candidates:
+        return 0
+
+    model_size = os.getenv(
+        "OCR_REFINEMENT_MODEL_SIZE",
+        os.getenv("OCR_MODEL_SIZE", "small"),
+    ).strip().lower() or "small"
+    sample_count = min(5, env_int("OCR_REFINEMENT_SAMPLES", 3, 1))
+    broad_region = tuple(
+        float(value) for value in (video_info.get("region") or (0.04, 0.48, 0.92, 0.46))
+    )
+    refine_min_conf = env_float("OCR_REFINEMENT_MIN_CONFIDENCE", 0.50, 0.0)
+
+    cap = cv2.VideoCapture(str(input_path))
+    if not cap.isOpened():
+        base.log("OCR refinement skipped: OpenCV cannot decode this source")
+        return 0
+
+    base.log(
+        f"OCR adaptive refinement: {len(candidates)} uncertain segment(s), "
+        f"model={model_size}, samples={sample_count}"
+    )
+    engine = make_ocr_engine(model_size)
+    refined = 0
+    try:
+        for segment in candidates:
+            observations = []
+            for timestamp in _segment_sample_times(
+                float(segment.get("start", 0.0)),
+                float(segment.get("end", 0.0)),
+                sample_count,
+            ):
+                cap.set(cv2.CAP_PROP_POS_MSEC, max(0.0, timestamp) * 1000.0)
+                ok, frame = cap.read()
+                if not ok or frame is None:
+                    continue
+                text, confidence, boxes = ocr_frame(
+                    engine,
+                    frame,
+                    broad_region,
+                    refine_min_conf,
+                )
+                if text:
+                    observations.append({
+                        "text": text,
+                        "confidence": float(confidence),
+                        "boxes": list(boxes),
+                    })
+
+            consensus = ocr_quality.choose_consensus(
+                observations,
+                threshold=env_float("OCR_CONSENSUS_SIMILARITY", 0.72, 0.0),
+            )
+            if consensus is None:
+                continue
+
+            winner_count = int(consensus.get("winnerCount", 0))
+            old_conf = float(segment.get("confidence", 0.0))
+            new_conf = float(consensus.get("confidence", 0.0))
+            new_consensus = float(consensus.get("consensusScore", 0.0))
+            accept = (
+                winner_count >= min(2, sample_count)
+                or new_conf >= old_conf + 0.05
+                or new_consensus >= 0.80
+            )
+            if not accept:
+                continue
+
+            old_text = str(segment.get("text", ""))
+            segment["text"] = str(consensus.get("text", old_text))
+            segment["confidence"] = round(new_conf, 4)
+            segment["consensusScore"] = round(new_consensus, 4)
+            segment["observationCount"] = int(consensus.get("observationCount", 0))
+            segment["winnerCount"] = winner_count
+            segment["refined"] = True
+            segment["refinementModel"] = model_size
+            representative_boxes = consensus.get("representativeBoxes") or []
+            if representative_boxes:
+                _apply_geometry(segment, representative_boxes)
+            cleanup_regions = ocr_quality.merge_temporal_regions(
+                consensus.get("boxes") or [],
+                overlap_threshold=env_float("OCR_CLEANUP_TEMPORAL_OVERLAP", 0.28, 0.0),
+                pad_x=env_float("OCR_CLEANUP_PAD_X", 0.010, 0.0),
+                pad_y=env_float("OCR_CLEANUP_PAD_Y", 0.008, 0.0),
+                max_regions=env_int("OCR_CLEANUP_MAX_REGIONS", 10, 1),
+            )
+            if cleanup_regions:
+                segment["cleanupRegions"] = [
+                    [round(value, 6) for value in region] for region in cleanup_regions
+                ]
+            if segment["text"] != old_text:
+                base.log(
+                    f"OCR refinement corrected segment {segment.get('id', '?')}: "
+                    f"{old_text[:30]} -> {segment['text'][:30]}"
+                )
+            refined += 1
+    finally:
+        cap.release()
+
+    return refined
 
 
 def aggregate_text_region(
