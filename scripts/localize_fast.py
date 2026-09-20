@@ -230,9 +230,13 @@ def translate_batch_ollama(batch: list[dict], detected_language: str) -> list[di
     return _normalize_translation_response(parsed, batch)
 
 
-def translate_batch_ollama_repair(batch: list[dict], detected_language: str) -> list[dict]:
+def translate_batch_ollama_repair(
+    batch: list[dict],
+    detected_language: str,
+    model_override: str | None = None,
+) -> list[dict]:
     payload = {
-        "model": _repair_model("ollama"),
+        "model": model_override or _repair_model("ollama"),
         "stream": False,
         "think": False,
         "format": "json",
@@ -295,12 +299,16 @@ def translate_batch_openai(batch: list[dict], detected_language: str) -> list[di
     return _normalize_translation_response(parsed, batch)
 
 
-def translate_batch_openai_repair(batch: list[dict], detected_language: str) -> list[dict]:
+def translate_batch_openai_repair(
+    batch: list[dict],
+    detected_language: str,
+    model_override: str | None = None,
+) -> list[dict]:
     base_url = os.getenv("OPENAI_COMPAT_BASE_URL", "http://host.docker.internal:11434/v1").rstrip("/")
     api_key = os.getenv("OPENAI_COMPAT_API_KEY", "")
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     payload = {
-        "model": _repair_model("openai"),
+        "model": model_override or _repair_model("openai"),
         "temperature": 0,
         "messages": [
             {
@@ -329,9 +337,25 @@ def translate_batch_openai_repair(batch: list[dict], detected_language: str) -> 
 
 
 def repair_translation(batch: list[dict], language: str, provider: str) -> list[dict]:
-    if provider == "ollama":
-        return translate_batch_ollama_repair(batch, language)
-    return translate_batch_openai_repair(batch, language)
+    explicit = os.getenv("TRANSLATE_REPAIR_MODEL", "").strip()
+    primary = (
+        os.getenv("OLLAMA_MODEL", "qwen3:8b")
+        if provider == "ollama"
+        else os.getenv("OPENAI_COMPAT_MODEL", os.getenv("OLLAMA_MODEL", "qwen3:8b"))
+    )
+    try:
+        if provider == "ollama":
+            return translate_batch_ollama_repair(batch, language)
+        return translate_batch_openai_repair(batch, language)
+    except Exception as error:
+        if not explicit or explicit == primary:
+            raise
+        base.log(
+            f"Repair model {explicit} unavailable/failed; fallback to primary {primary}: {error}"
+        )
+        if provider == "ollama":
+            return translate_batch_ollama_repair(batch, language, model_override=primary)
+        return translate_batch_openai_repair(batch, language, model_override=primary)
 
 
 def translate_once(batch: list[dict], language: str, provider: str) -> list[dict]:
