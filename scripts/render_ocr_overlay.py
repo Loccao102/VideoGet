@@ -372,7 +372,7 @@ def render(
     cleanup_mode = os.getenv("OCR_SOURCE_CLEANUP_MODE", "cover").strip().lower() or "cover"
     if cleanup_mode not in {"cover", "blur", "hybrid"}:
         raise RuntimeError("OCR_SOURCE_CLEANUP_MODE must be cover, blur, or hybrid")
-    cleanup_alpha = clamp(smart.env_float("OCR_SOURCE_CLEANUP_ALPHA", 0.94, 0.0), 0.0, 1.0)
+    cleanup_alpha = clamp(smart.env_float("OCR_SOURCE_CLEANUP_ALPHA", 1.0, 0.0), 0.0, 1.0)
     capsule_alpha = clamp(smart.env_float("OCR_OVERLAY_CAPSULE_ALPHA", 0.24, 0.0), 0.0, 1.0)
     box_alpha = clamp(smart.env_float("OCR_OVERLAY_BOTTOM_BOX_ALPHA", 0.88, 0.0), 0.0, 1.0)
     max_segments = smart.env_int("OCR_OVERLAY_MAX_SEGMENTS", 240, 10)
