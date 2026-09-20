@@ -330,7 +330,7 @@ Mặc định:
 
 ```env
 OCR_SOURCE_CLEANUP_MODE=cover
-OCR_SOURCE_CLEANUP_ALPHA=0.94
+OCR_SOURCE_CLEANUP_ALPHA=1.0
 ```
 
 `cover` được chọn vì yêu cầu sản phẩm là **không còn đọc được chữ Trung**. `blur` và `hybrid` vẫn có thể bật thủ công nếu muốn giữ nền tự nhiên hơn, nhưng không có cùng guarantee.
