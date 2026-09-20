@@ -26,6 +26,7 @@ from rapidocr import EngineType, ModelType, OCRVersion, RapidOCR
 
 import localize as base
 import localize_fast as fast  # noqa: F401 - installs optimized translation overrides on base
+import ocr_quality
 import render_subtitles
 import smart_render as smart
 
@@ -110,8 +111,8 @@ def detect_ocr_region(input_path: Path, output_dir: Path, width: int, height: in
     return 0.04, 0.48, 0.92, 0.46
 
 
-def make_ocr_engine() -> RapidOCR:
-    raw_size = os.getenv("OCR_MODEL_SIZE", "small").strip().lower()
+def make_ocr_engine(model_size: str | None = None) -> RapidOCR:
+    raw_size = (model_size or os.getenv("OCR_MODEL_SIZE", "small")).strip().lower()
     model_type = {
         "tiny": ModelType.TINY,
         "small": ModelType.SMALL,
@@ -135,19 +136,11 @@ def make_ocr_engine() -> RapidOCR:
 
 
 def normalize_text(value: str) -> str:
-    value = re.sub(r"\s+", "", value or "")
-    value = re.sub(r"[\u200b-\u200f\ufeff]", "", value)
-    return value.strip()
+    return ocr_quality.normalize_text(value)
 
 
 def similarity(left: str, right: str) -> float:
-    a = re.sub(r"[^\w\u3400-\u9fff]", "", normalize_text(left), flags=re.UNICODE)
-    b = re.sub(r"[^\w\u3400-\u9fff]", "", normalize_text(right), flags=re.UNICODE)
-    if not a or not b:
-        return 0.0
-    if a == b:
-        return 1.0
-    return difflib.SequenceMatcher(None, a, b).ratio()
+    return ocr_quality.similarity(left, right)
 
 
 def result_items(result) -> list[tuple[str, float, np.ndarray | None]]:
@@ -189,6 +182,85 @@ def result_items(result) -> list[tuple[str, float, np.ndarray | None]]:
     return out
 
 
+def _select_caption_items(
+    accepted: list[tuple[float, float, str, float, np.ndarray | None]],
+    crop_height: int,
+    crop_width: int,
+) -> list[tuple[float, float, str, float, np.ndarray | None]]:
+    """Prefer one coherent caption line/stack over unrelated scene text in the ROI."""
+    if len(accepted) <= 1:
+        return accepted
+
+    line_tolerance = max(8.0, crop_height * env_float("OCR_LINE_Y_TOLERANCE", 0.045, 0.01))
+    lines: list[list[tuple[float, float, str, float, np.ndarray | None]]] = []
+    for item in sorted(accepted, key=lambda value: (value[0], value[1])):
+        box = item[4]
+        cy = item[0]
+        if box is not None and box.size:
+            cy = float(np.mean(box[:, 1]))
+        target = None
+        for line in lines:
+            centers = []
+            for existing in line:
+                existing_box = existing[4]
+                centers.append(
+                    float(np.mean(existing_box[:, 1]))
+                    if existing_box is not None and existing_box.size
+                    else existing[0]
+                )
+            if abs(cy - float(np.mean(centers))) <= line_tolerance:
+                target = line
+                break
+        if target is None:
+            lines.append([item])
+        else:
+            target.append(item)
+
+    def metrics(items):
+        boxes = [item[4] for item in items if item[4] is not None and item[4].size]
+        if boxes:
+            left = min(float(np.min(box[:, 0])) for box in boxes)
+            right = max(float(np.max(box[:, 0])) for box in boxes)
+            top = min(float(np.min(box[:, 1])) for box in boxes)
+            bottom = max(float(np.max(box[:, 1])) for box in boxes)
+        else:
+            left = min(item[1] for item in items)
+            right = left
+            top = min(item[0] for item in items)
+            bottom = top
+        text = "".join(item[2] for item in items)
+        confidence = float(np.mean([item[3] for item in items]))
+        coverage = max(0.0, right - left) / max(1.0, float(crop_width))
+        center_x = ((left + right) / 2.0) / max(1.0, float(crop_width))
+        center_score = max(0.0, 1.0 - abs(center_x - 0.5) * 2.0)
+        center_y = ((top + bottom) / 2.0) / max(1.0, float(crop_height))
+        length_score = min(1.0, len(normalize_text(text)) / 18.0)
+        return confidence, coverage, center_score, center_y, length_score
+
+    candidates: list[list[tuple[float, float, str, float, np.ndarray | None]]] = []
+    for index, line in enumerate(lines):
+        candidates.append(line)
+        if index + 1 < len(lines):
+            first = metrics(line)
+            second = metrics(lines[index + 1])
+            # Two-line captions are common. Only combine adjacent rows when both
+            # look horizontally caption-like rather than arbitrary scene labels.
+            if abs(first[3] - second[3]) <= env_float("OCR_TWO_LINE_MAX_GAP", 0.15, 0.02):
+                candidates.append(line + lines[index + 1])
+
+    def rank(items) -> float:
+        confidence, coverage, center_score, center_y, length_score = metrics(items)
+        return (
+            confidence * 1.55
+            + min(1.0, coverage / 0.55) * 0.75
+            + center_score * 0.35
+            + length_score * 0.55
+            + center_y * 0.15
+        )
+
+    return max(candidates, key=rank)
+
+
 def ocr_frame(
     engine: RapidOCR,
     frame: np.ndarray,
@@ -217,6 +289,7 @@ def ocr_frame(
     if not accepted:
         return "", 0.0, []
 
+    accepted = _select_caption_items(accepted, crop.shape[0], crop.shape[1])
     accepted.sort(key=lambda item: (round(item[0] / max(1.0, crop.shape[0] * 0.035)), item[1]))
     text = " ".join(item[2] for item in accepted).strip()
     confidence = float(np.mean([item[3] for item in accepted]))
@@ -236,8 +309,39 @@ def finalize_segment(segment: dict, output: list[dict], persistent_limit: float)
     duration = float(segment["end"]) - float(segment["start"])
     if duration < env_float("OCR_MIN_DURATION_SEC", 0.35, 0.05):
         return
+
+    observations = list(segment.pop("_observations", []) or [])
+    consensus = ocr_quality.choose_consensus(
+        observations,
+        threshold=env_float("OCR_CONSENSUS_SIMILARITY", 0.72, 0.0),
+    )
+    if consensus is not None:
+        segment["text"] = consensus["text"]
+        segment["confidence"] = round(float(consensus["confidence"]), 4)
+        segment["consensusScore"] = round(float(consensus["consensusScore"]), 4)
+        segment["observationCount"] = int(consensus["observationCount"])
+        segment["winnerCount"] = int(consensus["winnerCount"])
+        representative_boxes = consensus.get("representativeBoxes") or []
+        if representative_boxes:
+            _apply_geometry(segment, representative_boxes)
+
+        cleanup_regions = ocr_quality.merge_temporal_regions(
+            consensus.get("boxes") or [],
+            overlap_threshold=env_float("OCR_CLEANUP_TEMPORAL_OVERLAP", 0.28, 0.0),
+            pad_x=env_float("OCR_CLEANUP_PAD_X", 0.010, 0.0),
+            pad_y=env_float("OCR_CLEANUP_PAD_Y", 0.008, 0.0),
+            max_regions=env_int("OCR_CLEANUP_MAX_REGIONS", 10, 1),
+        )
+        if cleanup_regions:
+            segment["cleanupRegions"] = [
+                [round(value, 6) for value in region] for region in cleanup_regions
+            ]
+    else:
+        segment["consensusScore"] = 0.0
+        segment["observationCount"] = int(segment.get("observations", 1))
+
     # Very long unchanging text is usually a watermark/product label rather than captions.
-    if persistent_limit > 0 and duration >= persistent_limit and int(segment.get("observations", 1)) >= 4:
+    if persistent_limit > 0 and duration >= persistent_limit and int(segment.get("observationCount", 1)) >= 4:
         base.log(f"OCR bỏ text tĩnh {duration:.1f}s: {segment['text'][:60]}")
         return
     segment["id"] = len(output)
@@ -405,10 +509,16 @@ def extract_segments(input_path: Path, output_dir: Path) -> tuple[list[dict], li
                 current["end"] = min(duration, timestamp + interval)
                 current["lastSeen"] = timestamp
                 current["observations"] = int(current.get("observations", 1)) + 1
+                current.setdefault("_observations", []).append({
+                    "text": text,
+                    "confidence": float(confidence),
+                    "boxes": list(boxes),
+                })
+                # Keep a recent representative for matching while final text is
+                # decided by multi-frame consensus in finalize_segment().
                 if confidence > float(current.get("confidence", 0.0)):
                     current["text"] = text
                     current["confidence"] = round(confidence, 4)
-                    _apply_geometry(current, boxes)
             else:
                 if current is not None:
                     finalize_segment(current, segments, persistent_limit)
@@ -420,6 +530,11 @@ def extract_segments(input_path: Path, output_dir: Path) -> tuple[list[dict], li
                     "text": text,
                     "confidence": round(confidence, 4),
                     "observations": 1,
+                    "_observations": [{
+                        "text": text,
+                        "confidence": float(confidence),
+                        "boxes": list(boxes),
+                    }],
                 }
                 _apply_geometry(current, boxes)
     finally:
