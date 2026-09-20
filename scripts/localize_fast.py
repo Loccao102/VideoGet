@@ -25,6 +25,7 @@ from pydub import AudioSegment
 from pydub.effects import speedup
 
 import localize as base
+import translation_guard
 
 
 TRANSLATION_PROMPT_VERSION = 2
@@ -226,8 +227,11 @@ def translate_batch_openai(batch: list[dict], detected_language: str) -> list[di
 
 def translate_once(batch: list[dict], language: str, provider: str) -> list[dict]:
     if provider == "ollama":
-        return translate_batch_ollama(batch, language)
-    return translate_batch_openai(batch, language)
+        translated = translate_batch_ollama(batch, language)
+    else:
+        translated = translate_batch_openai(batch, language)
+    translation_guard.assert_vietnamese_translation(batch, translated, language)
+    return translated
 
 
 def translate_resilient(batch: list[dict], language: str, provider: str) -> list[dict]:
