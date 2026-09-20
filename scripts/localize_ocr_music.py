@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import gc
 import hashlib
 import json
 import os
@@ -577,6 +578,14 @@ def extract_segments(input_path: Path, output_dir: Path) -> tuple[list[dict], li
         "qualityTier": os.getenv("VIDEGET_QUALITY_TIER", "medium").strip().lower() or "medium",
         "segmentBBoxCount": sum(1 for segment in segments if segment.get("bbox")),
     }
+    # Release the first-pass ONNX sessions before an optional stronger model is
+    # loaded. This is important on Low tier where tiny -> small refinement should
+    # improve quality without keeping both model sets resident.
+    try:
+        del engine
+        gc.collect()
+    except Exception:
+        pass
     refined = refine_uncertain_segments(input_path, segments, info)
     info["refinedSegments"] = refined
     return segments, observed_boxes, info
@@ -595,6 +604,30 @@ def _segment_sample_times(start: float, end: float, count: int) -> list[float]:
     selected = ratios.get(max(1, min(5, count)), ratios[3])
     duration = end - start
     return [start + duration * ratio for ratio in selected]
+
+
+def _ffmpeg_frame_at(
+    input_path: Path,
+    timestamp: float,
+    width: int,
+    height: int,
+) -> np.ndarray | None:
+    frame_bytes = width * height * 3
+    process = subprocess.run(
+        [
+            "ffmpeg", "-v", "error", "-hwaccel", "none",
+            "-ss", f"{max(0.0, timestamp):.3f}",
+            "-i", str(input_path),
+            "-map", "0:v:0", "-an", "-sn", "-dn",
+            "-frames:v", "1",
+            "-pix_fmt", "bgr24", "-f", "rawvideo", "pipe:1",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if process.returncode != 0 or len(process.stdout) != frame_bytes:
+        return None
+    return np.frombuffer(process.stdout, dtype=np.uint8).reshape((height, width, 3))
 
 
 def refine_uncertain_segments(input_path: Path, segments: list[dict], video_info: dict) -> int:
@@ -629,8 +662,15 @@ def refine_uncertain_segments(input_path: Path, segments: list[dict], video_info
     refine_min_conf = env_float("OCR_REFINEMENT_MIN_CONFIDENCE", 0.50, 0.0)
 
     cap = cv2.VideoCapture(str(input_path))
-    if not cap.isOpened():
-        base.log("OCR refinement skipped: OpenCV cannot decode this source")
+    cv_available = cap.isOpened()
+    if not cv_available:
+        base.log("OCR refinement: OpenCV decode unavailable; using FFmpeg frame fallback")
+
+    width = int(video_info.get("width") or 0)
+    height = int(video_info.get("height") or 0)
+    if width <= 0 or height <= 0:
+        if cv_available:
+            cap.release()
         return 0
 
     base.log(
@@ -647,9 +687,15 @@ def refine_uncertain_segments(input_path: Path, segments: list[dict], video_info
                 float(segment.get("end", 0.0)),
                 sample_count,
             ):
-                cap.set(cv2.CAP_PROP_POS_MSEC, max(0.0, timestamp) * 1000.0)
-                ok, frame = cap.read()
-                if not ok or frame is None:
+                frame = None
+                if cv_available:
+                    cap.set(cv2.CAP_PROP_POS_MSEC, max(0.0, timestamp) * 1000.0)
+                    ok, decoded = cap.read()
+                    if ok and decoded is not None:
+                        frame = decoded
+                if frame is None:
+                    frame = _ffmpeg_frame_at(input_path, timestamp, width, height)
+                if frame is None:
                     continue
                 text, confidence, boxes = ocr_frame(
                     engine,
@@ -712,7 +758,8 @@ def refine_uncertain_segments(input_path: Path, segments: list[dict], video_info
                 )
             refined += 1
     finally:
-        cap.release()
+        if cv_available:
+            cap.release()
 
     return refined
 
