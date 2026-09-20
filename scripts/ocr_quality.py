@@ -89,6 +89,7 @@ def choose_consensus(
         "observationCount": len(usable),
         "winnerCount": len(winner),
         "boxes": boxes,
+        "representativeBoxes": list(representative.get("boxes") or []),
     }
 
 
