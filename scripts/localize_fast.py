@@ -28,7 +28,7 @@ import localize as base
 import translation_guard
 
 
-TRANSLATION_PROMPT_VERSION = 2
+TRANSLATION_PROMPT_VERSION = 3
 
 
 def env_int(name: str, default: int, minimum: int = 0) -> int:
@@ -100,6 +100,41 @@ def translation_prompt(batch: list[dict], detected_language: str) -> str:
         + "\n\nChỉ trả JSON hợp lệ đúng schema: "
         + '{"translations":[{"id":0,"text":"..."}]}.'
     )
+
+
+def force_vietnamese_prompt(batch: list[dict], detected_language: str) -> str:
+    """Minimal recovery prompt used only when the normal localization prompt echoes Chinese."""
+    context = batch[0].get("_context", {}) if batch else {}
+    targets = [{"id": item["id"], "text": item["text"]} for item in batch]
+    context_payload = {
+        "before": context.get("before") or [],
+        "after": context.get("after") or [],
+    }
+    return (
+        "NHIỆM VỤ DUY NHẤT: dịch từng câu nguồn sang TIẾNG VIỆT tự nhiên.\n"
+        "Đây là bước sửa lỗi vì lần dịch trước đã chép lại tiếng Trung.\n"
+        "BẮT BUỘC:\n"
+        "- Không được chép lại câu tiếng Trung.\n"
+        "- Kết quả phải đọc tự nhiên với người Việt, ưu tiên nghĩa đúng hơn dịch từng chữ.\n"
+        "- Ngoại trừ tên riêng/thương hiệu thật sự cần giữ, không để lại chữ Hán trong trường text.\n"
+        "- Không giải thích, không markdown, không thêm thông tin.\n"
+        "- Giữ nguyên id và đúng số lượng phần tử.\n"
+        f"Ngôn ngữ nguồn: {detected_language or 'zh'}.\n"
+        "Ngữ cảnh tham khảo (không cần trả lại): "
+        + json.dumps(context_payload, ensure_ascii=False)
+        + "\nCâu cần dịch: "
+        + json.dumps(targets, ensure_ascii=False)
+        + '\nChỉ trả JSON: {"translations":[{"id":0,"text":"câu tiếng Việt"}]}.'
+    )
+
+
+def _repair_model(provider: str) -> str:
+    explicit = os.getenv("TRANSLATE_REPAIR_MODEL", "").strip()
+    if explicit:
+        return explicit
+    if provider == "ollama":
+        return os.getenv("OLLAMA_MODEL", "qwen3:8b")
+    return os.getenv("OPENAI_COMPAT_MODEL", os.getenv("OLLAMA_MODEL", "qwen3:8b"))
 
 
 def _normalize_translation_response(parsed, batch: list[dict]) -> list[dict]:
@@ -195,6 +230,38 @@ def translate_batch_ollama(batch: list[dict], detected_language: str) -> list[di
     return _normalize_translation_response(parsed, batch)
 
 
+def translate_batch_ollama_repair(batch: list[dict], detected_language: str) -> list[dict]:
+    payload = {
+        "model": _repair_model("ollama"),
+        "stream": False,
+        "think": False,
+        "format": "json",
+        "keep_alive": os.getenv("OLLAMA_KEEP_ALIVE", "15m"),
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "你是中文到越南语翻译器。必须翻译成自然越南语，禁止复制中文原句。"
+                    "除必要专有名词外输出不得保留汉字。只返回JSON。 "
+                    "Bạn là bộ dịch Trung -> Việt. Chỉ trả JSON tiếng Việt."
+                ),
+            },
+            {"role": "user", "content": force_vietnamese_prompt(batch, detected_language)},
+        ],
+        "options": {
+            "temperature": 0,
+        },
+    }
+    response = base.http_json(
+        ollama_base() + "/api/chat",
+        payload,
+        timeout=env_int("TRANSLATE_TIMEOUT_SEC", 180, 30),
+    )
+    content = response.get("message", {}).get("content", "")
+    parsed = base.extract_json(content)
+    return _normalize_translation_response(parsed, batch)
+
+
 def translate_batch_openai(batch: list[dict], detected_language: str) -> list[dict]:
     base_url = os.getenv("OPENAI_COMPAT_BASE_URL", "http://host.docker.internal:11434/v1").rstrip("/")
     model = os.getenv("OPENAI_COMPAT_MODEL", os.getenv("OLLAMA_MODEL", "qwen3:8b"))
@@ -225,13 +292,64 @@ def translate_batch_openai(batch: list[dict], detected_language: str) -> list[di
     return _normalize_translation_response(parsed, batch)
 
 
+def translate_batch_openai_repair(batch: list[dict], detected_language: str) -> list[dict]:
+    base_url = os.getenv("OPENAI_COMPAT_BASE_URL", "http://host.docker.internal:11434/v1").rstrip("/")
+    api_key = os.getenv("OPENAI_COMPAT_API_KEY", "")
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    payload = {
+        "model": _repair_model("openai"),
+        "temperature": 0,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "Translate Chinese source captions into natural Vietnamese. "
+                    "Never copy the Chinese source. Except required proper nouns, "
+                    "the translated text must not contain Han characters. Return strict JSON only."
+                ),
+            },
+            {"role": "user", "content": force_vietnamese_prompt(batch, detected_language)},
+        ],
+    }
+    response = base.http_json(
+        base_url + "/chat/completions",
+        payload,
+        headers=headers,
+        timeout=env_int("TRANSLATE_TIMEOUT_SEC", 180, 30),
+    )
+    choices = response.get("choices") or []
+    if not choices:
+        raise RuntimeError("translation repair endpoint returned no choices")
+    content = choices[0].get("message", {}).get("content", "")
+    parsed = base.extract_json(content)
+    return _normalize_translation_response(parsed, batch)
+
+
+def repair_translation(batch: list[dict], language: str, provider: str) -> list[dict]:
+    if provider == "ollama":
+        return translate_batch_ollama_repair(batch, language)
+    return translate_batch_openai_repair(batch, language)
+
+
 def translate_once(batch: list[dict], language: str, provider: str) -> list[dict]:
     if provider == "ollama":
         translated = translate_batch_ollama(batch, language)
     else:
         translated = translate_batch_openai(batch, language)
-    translation_guard.assert_vietnamese_translation(batch, translated, language)
-    return translated
+
+    try:
+        translation_guard.assert_vietnamese_translation(batch, translated, language)
+        return translated
+    except RuntimeError as error:
+        if "untranslated Chinese" not in str(error) or not env_bool("TRANSLATE_REPAIR_ON_HAN", True):
+            raise
+        base.log(
+            "Bản dịch còn tiếng Trung; chuyển sang prompt recovery Trung→Việt "
+            f"(model={_repair_model(provider)}, segments={len(batch)})"
+        )
+        repaired = repair_translation(batch, language, provider)
+        translation_guard.assert_vietnamese_translation(batch, repaired, language)
+        return repaired
 
 
 def translate_resilient(batch: list[dict], language: str, provider: str) -> list[dict]:
@@ -242,6 +360,12 @@ def translate_resilient(batch: list[dict], language: str, provider: str) -> list
             return translate_once(batch, language, provider)
         except Exception as error:
             last_error = error
+            # A deterministic translation that still echoes Chinese will not improve
+            # by resending the exact same request. The recovery prompt already ran
+            # once inside translate_once; split immediately to give each sentence a
+            # smaller, unambiguous request.
+            if "untranslated Chinese" in str(error):
+                break
             if attempt < retries:
                 wait = min(8, 2**attempt)
                 base.log(f"Dịch batch lỗi, retry {attempt + 1}/{retries} sau {wait}s: {error}")
