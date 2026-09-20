@@ -236,7 +236,10 @@ def translate_batch_ollama_repair(batch: list[dict], detected_language: str) -> 
         "stream": False,
         "think": False,
         "format": "json",
-        "keep_alive": os.getenv("OLLAMA_KEEP_ALIVE", "15m"),
+        "keep_alive": os.getenv(
+            "TRANSLATE_REPAIR_KEEP_ALIVE",
+            os.getenv("OLLAMA_KEEP_ALIVE", "15m"),
+        ),
         "messages": [
             {
                 "role": "system",
