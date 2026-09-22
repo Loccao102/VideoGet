@@ -65,3 +65,47 @@ func TestParseDouyinSearchAPIBodiesDeduplicatesPages(t *testing.T) {
 		t.Fatalf("len(results) = %d, want 2", len(results))
 	}
 }
+
+
+func TestParseDouyinSearchAPIBodiesAcceptsNestedEndpointShapes(t *testing.T) {
+	body := `{
+		"status_code": 0,
+		"data": {
+			"search_result": [
+				{"payload": {"aweme": {
+					"aweme_id": "7654321098765432199",
+					"desc": "猫咪迷惑行为",
+					"author": {"nickname": "猫猫观察员"},
+					"statistics": {"play_count": 456789, "digg_count": 22000}
+				}}}
+			]
+		}
+	}`
+
+	results, err := parseDouyinSearchAPIBodies([]string{body}, "猫咪迷惑行为", 10)
+	if err != nil {
+		t.Fatalf("parseDouyinSearchAPIBodies error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("len(results) = %d, want 1", len(results))
+	}
+	if results[0].ID != "7654321098765432199" || results[0].Title != "猫咪迷惑行为" {
+		t.Fatalf("unexpected nested result: %+v", results[0])
+	}
+}
+
+func TestParseDouyinVideoLinksDeduplicatesRenderedAnchors(t *testing.T) {
+	links := []string{
+		"https://www.douyin.com/video/7654321098765432101",
+		"https://www.douyin.com/video/7654321098765432101?previous_page=search_result",
+		"https://www.douyin.com/video/7654321098765432102",
+		"https://www.douyin.com/user/example",
+	}
+	results := parseDouyinVideoLinks(links, "猫咪", 10)
+	if len(results) != 2 {
+		t.Fatalf("len(results) = %d, want 2", len(results))
+	}
+	if results[0].ID != "7654321098765432101" || results[1].ID != "7654321098765432102" {
+		t.Fatalf("unexpected IDs: %+v", results)
+	}
+}
