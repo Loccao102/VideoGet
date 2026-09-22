@@ -33,7 +33,7 @@ $args = @(
     "--remote-debugging-port=$Port",
     "--remote-debugging-address=$BindAddress",
     "--remote-allow-origins=*",
-    "--user-data-dir=$ProfileDir",
+    "--user-data-dir=`"$ProfileDir`"",
     "--no-first-run",
     "--no-default-browser-check",
     "https://www.douyin.com/"
