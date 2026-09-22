@@ -37,16 +37,20 @@ var (
 )
 
 type douyinBrowserSearchPayload struct {
-	APIBodies          []string `json:"apiBodies"`
-	VideoLinks         []string `json:"videoLinks"`
-	DOM                string   `json:"dom"`
-	FinalURL           string   `json:"finalUrl"`
-	Title              string   `json:"title"`
-	CookieCount        int      `json:"cookieCount"`
-	CookieNames        []string `json:"cookieNames"`
-	CapturedSearchURLs []string `json:"capturedSearchUrls"`
-	ProfilePersistent  bool     `json:"profilePersistent"`
-	Error              string   `json:"error"`
+	APIBodies           []string `json:"apiBodies"`
+	VideoLinks          []string `json:"videoLinks"`
+	DOM                 string   `json:"dom"`
+	FinalURL            string   `json:"finalUrl"`
+	Title               string   `json:"title"`
+	CookieCount         int      `json:"cookieCount"`
+	CookieNames         []string `json:"cookieNames"`
+	CapturedSearchURLs  []string `json:"capturedSearchUrls"`
+	ProfilePersistent   bool     `json:"profilePersistent"`
+	SessionSource       string   `json:"sessionSource"`
+	LocalStorageCount   int      `json:"localStorageCount"`
+	SessionStorageCount int      `json:"sessionStorageCount"`
+	HasIndexedDB        bool     `json:"hasIndexedDB"`
+	Error               string   `json:"error"`
 }
 
 type douyinNativeSearchResponse struct {
@@ -111,17 +115,17 @@ func (p *DouyinProvider) searchNativeBrowser(ctx context.Context, keyword string
 		if apiErr != nil {
 			return nil, apiErr
 		}
-		if payload.CookieCount == 0 {
-			return nil, fmt.Errorf("native Douyin search has no browser cookies; configure DOUYIN_COOKIE or a logged-in persistent DOUYIN_NATIVE_SEARCH_PROFILE_DIR")
-		}
 		return nil, fmt.Errorf(
-			"native Douyin search rendered %q (%s) but found no videos for %q (cookies=%d, captured_search_responses=%d, persistent_profile=%t)",
+			"native Douyin search rendered %q (%s) but found no videos for %q (session_source=%s, captured_search_responses=%d, local_storage=%d, session_storage=%d, indexeddb=%t, cookies_stored=%d)",
 			payload.Title,
 			payload.FinalURL,
 			keyword,
-			payload.CookieCount,
+			strings.TrimSpace(payload.SessionSource),
 			len(payload.CapturedSearchURLs),
-			payload.ProfilePersistent,
+			payload.LocalStorageCount,
+			payload.SessionStorageCount,
+			payload.HasIndexedDB,
+			payload.CookieCount,
 		)
 	}
 
