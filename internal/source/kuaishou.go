@@ -11,7 +11,6 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/Loccao102/VideoGet/internal/model"
 )
@@ -147,6 +146,7 @@ func parseKuaishouSearchDOM(document, keyword string, limit int) []model.Video {
 		limit = 10
 	}
 	document = html.UnescapeString(document)
+	document = strings.ReplaceAll(document, `\\/`, "/")
 	seen := map[string]struct{}{}
 	out := make([]model.Video, 0, limit)
 
@@ -205,4 +205,3 @@ func canonicalKuaishouVideoURL(raw string) string {
 	return "https://www.kuaishou.com/short-video/" + id
 }
 
-var _ = time.Second
