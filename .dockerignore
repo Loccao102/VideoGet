@@ -1,0 +1,31 @@
+# Runtime/generated data must never enter the Docker build context.
+downloads/
+*.db
+*.db-shm
+*.db-wal
+
+# Browser profiles contain sockets / Singleton* files that BuildKit cannot archive.
+**/.douyin-profile/
+**/douyin-chrome-profile/
+**/SingletonCookie
+**/SingletonLock
+**/SingletonSocket
+
+# Local secrets and editor metadata.
+.env
+.env.*
+!.env.example
+!.env.low.example
+!.env.medium.example
+!.env.high.example
+.git/
+.github/
+.idea/
+.vscode/
+.DS_Store
+*.log
+
+# Python/Go local build caches.
+__pycache__/
+*.pyc
+.pytest_cache/
