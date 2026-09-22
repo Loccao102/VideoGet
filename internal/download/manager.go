@@ -464,6 +464,8 @@ func (m *Manager) download(ctx context.Context, video model.Video, outputDir str
 		return m.ytdlpBilibili(ctx, video.URL, outputDir)
 	case "douyin":
 		return m.douyinBrowserAwareDirect(ctx, video.URL, outputDir)
+	case "kuaishou":
+		return m.kuaishou(ctx, video.URL, outputDir)
 	default:
 		if isPublicDownloadPlatform(platform) {
 			return m.ytdlpPublic(ctx, platform, video.URL, outputDir)

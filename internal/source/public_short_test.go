@@ -4,12 +4,11 @@ import "testing"
 
 func TestPublicShortProvidersNormalizeSupportedURLs(t *testing.T) {
 	providers := NewPublicShortProviders()
-	if len(providers) < 8 {
-		t.Fatalf("got %d providers, want at least 8", len(providers))
+	if len(providers) < 7 {
+		t.Fatalf("got %d providers, want at least 7", len(providers))
 	}
 
 	cases := map[string]string{
-		"kuaishou":     "https://www.kuaishou.com/short-video/3xabc123?utm_source=test",
 		"xiaohongshu": "https://www.xiaohongshu.com/explore/66abcdef1234567890",
 		"weibo":        "https://weibo.com/tv/show/1034:1234567890",
 		"xigua":        "https://www.ixigua.com/7123456789012345678/",
