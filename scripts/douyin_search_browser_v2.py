@@ -5,7 +5,9 @@ Douyin changes its web search endpoints and short-lived browser tokens often.
 This helper therefore lets Douyin's own page create signed requests, keeps a
 persistent Chromium profile when VideoGet has a download directory, captures
 multiple search-response shapes, and also harvests rendered /video/ links as a
-fallback. Cookie values are never printed.
+fallback. Authentication is treated as browser state (profile storage plus
+browser-generated request tokens/headers), not as a requirement that every API
+request carry a Cookie header. Secret values are never printed.
 """
 
 from __future__ import annotations
@@ -292,6 +294,8 @@ async def capture(args: argparse.Namespace) -> dict[str, Any]:
                     target_requests: set[str] = set()
                     completed_requests: set[str] = set()
                     captured_urls: list[str] = []
+                    request_urls: dict[str, str] = {}
+                    request_header_names: set[str] = set()
                     deadline = time.monotonic() + args.render_seconds
                     next_scroll = time.monotonic() + 2.5
                     scrolls = 0
@@ -308,7 +312,22 @@ async def capture(args: argparse.Namespace) -> dict[str, Any]:
                         if event:
                             method = event.get("method")
                             params = event.get("params") or {}
-                            if method == "Network.responseReceived":
+                            if method == "Network.requestWillBeSent":
+                                request = params.get("request") or {}
+                                request_url = str(request.get("url") or "")
+                                request_id = str(params.get("requestId") or "")
+                                if request_id:
+                                    request_urls[request_id] = request_url
+                                if request_id and is_search_response_url(request_url):
+                                    headers = request.get("headers") or {}
+                                    request_header_names.update(str(name).lower() for name in headers.keys())
+                            elif method == "Network.requestWillBeSentExtraInfo":
+                                request_id = str(params.get("requestId") or "")
+                                request_url = request_urls.get(request_id, "")
+                                if request_id and is_search_response_url(request_url):
+                                    headers = params.get("headers") or {}
+                                    request_header_names.update(str(name).lower() for name in headers.keys())
+                            elif method == "Network.responseReceived":
                                 response = params.get("response") or {}
                                 response_url = str(response.get("url") or "")
                                 mime_type = str(response.get("mimeType") or "")
@@ -376,6 +395,22 @@ async def capture(args: argparse.Namespace) -> dict[str, Any]:
                     if len(dom.encode("utf-8", errors="ignore")) > args.dom_max_bytes:
                         dom = ""
 
+                    local_storage_keys: list[str] = []
+                    session_storage_keys: list[str] = []
+                    try:
+                        storage_result = await cdp.command(
+                            "Runtime.evaluate",
+                            {
+                                "expression": "({localStorageKeys:Object.keys(window.localStorage || {}),sessionStorageKeys:Object.keys(window.sessionStorage || {})})",
+                                "returnByValue": True,
+                            },
+                        )
+                        storage_value = (((storage_result.get("result") or {}).get("value")) or {})
+                        local_storage_keys = sorted(str(item) for item in (storage_value.get("localStorageKeys") or []) if item)
+                        session_storage_keys = sorted(str(item) for item in (storage_value.get("sessionStorageKeys") or []) if item)
+                    except Exception:
+                        pass
+
                     browser_cookie_count = len(cookie_pairs)
                     cookie_names: list[str] = []
                     try:
@@ -398,6 +433,9 @@ async def capture(args: argparse.Namespace) -> dict[str, Any]:
                         "title": title,
                         "cookieCount": browser_cookie_count,
                         "cookieNames": cookie_names,
+                        "localStorageKeys": local_storage_keys,
+                        "sessionStorageKeys": session_storage_keys,
+                        "requestHeaderNames": sorted(request_header_names),
                         "capturedSearchUrls": captured_urls[:20],
                         "profilePersistent": temp_profile_dir is None,
                     }
