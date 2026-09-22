@@ -5,7 +5,8 @@ Douyin changes its web search endpoints and short-lived browser tokens often.
 This helper therefore lets Douyin's own page create signed requests, keeps a
 persistent Chromium profile when VideoGet has a download directory, captures
 multiple search-response shapes, and also harvests rendered /video/ links as a
-fallback. Cookie values are never printed.
+fallback. Authentication is treated as browser state, not as a Cookie header.
+Cookie/storage values are never printed.
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse, urlunparse
 
 import aiohttp
 
@@ -156,6 +157,84 @@ async def wait_for_target(session: aiohttp.ClientSession, port: int, timeout: fl
     raise RuntimeError(f"Chromium CDP target did not appear: {last_error or 'timeout'}")
 
 
+def rewrite_remote_ws_url(ws_url: str, cdp_base: str) -> str:
+    """Chrome often reports ws://127.0.0.1 even when reached through host.docker.internal."""
+    ws = urlparse(ws_url)
+    base = urlparse(cdp_base if "://" in cdp_base else "http://" + cdp_base)
+    scheme = "wss" if base.scheme == "https" else "ws"
+    return urlunparse((scheme, base.netloc, ws.path, ws.params, ws.query, ws.fragment))
+
+
+async def open_remote_target(
+    session: aiohttp.ClientSession,
+    cdp_base: str,
+    page_url: str,
+    timeout: float,
+) -> dict[str, Any]:
+    base = cdp_base.rstrip("/")
+    encoded = quote(page_url, safe=":/?=&%")
+    last_error: Exception | None = None
+
+    # Chrome DevTools supports PUT /json/new?<url>. Creating a dedicated tab avoids
+    # hijacking whatever the user is currently viewing in the authenticated browser.
+    try:
+        async with session.put(
+            f"{base}/json/new?{encoded}",
+            timeout=aiohttp.ClientTimeout(total=min(timeout, 5.0)),
+        ) as response:
+            if 200 <= response.status < 300:
+                target = await response.json(content_type=None)
+                if target.get("webSocketDebuggerUrl"):
+                    target["webSocketDebuggerUrl"] = rewrite_remote_ws_url(
+                        str(target["webSocketDebuggerUrl"]), base
+                    )
+                    return target
+    except Exception as exc:
+        last_error = exc
+
+    try:
+        async with session.get(
+            f"{base}/json/list",
+            timeout=aiohttp.ClientTimeout(total=min(timeout, 5.0)),
+        ) as response:
+            targets = await response.json(content_type=None)
+            pages = [
+                item
+                for item in targets
+                if item.get("type") == "page" and item.get("webSocketDebuggerUrl")
+            ]
+            preferred = next(
+                (item for item in pages if "douyin.com" in str(item.get("url") or "")),
+                pages[0] if pages else None,
+            )
+            if preferred:
+                preferred["webSocketDebuggerUrl"] = rewrite_remote_ws_url(
+                    str(preferred["webSocketDebuggerUrl"]), base
+                )
+                return preferred
+    except Exception as exc:
+        last_error = exc
+
+    raise RuntimeError(f"remote Chromium CDP target unavailable: {last_error or 'no page target'}")
+
+
+async def close_remote_target(
+    session: aiohttp.ClientSession,
+    cdp_base: str,
+    target_id: str,
+) -> None:
+    if not target_id:
+        return
+    try:
+        async with session.get(
+            f"{cdp_base.rstrip('/')}/json/close/{target_id}",
+            timeout=aiohttp.ClientTimeout(total=2),
+        ):
+            pass
+    except Exception:
+        pass
+
+
 def stop_browser_tree(process: subprocess.Popen[Any]) -> None:
     """Terminate Chromium's whole process group; cleanup errors must never mask search output."""
     if process.poll() is not None:
@@ -197,27 +276,241 @@ def cleanup_temp_profile(path: str | None) -> None:
         time.sleep(0.15)
 
 
+async def capture_target(
+    session: aiohttp.ClientSession,
+    target: dict[str, Any],
+    args: argparse.Namespace,
+    page_url: str,
+    session_source: str,
+    inject_legacy_cookie: bool,
+) -> dict[str, Any]:
+    ws_url = str(target.get("webSocketDebuggerUrl") or "")
+    if not ws_url:
+        raise RuntimeError("CDP page target has no websocket URL")
+
+    async with session.ws_connect(
+        ws_url,
+        origin="http://127.0.0.1",
+        timeout=10.0,
+        max_msg_size=64 * 1024 * 1024,
+    ) as ws:
+        cdp = CDP(ws)
+        try:
+            await cdp.command("Network.enable", {"maxTotalBufferSize": 64 * 1024 * 1024})
+            await cdp.command("Page.enable")
+            await cdp.command("Runtime.enable")
+
+            # Only override UA for the Chromium instance VideoGet launched itself.
+            # A connected real browser must keep its own UA/fingerprint coherent.
+            if session_source != "remote-cdp":
+                user_agent = os.getenv("DOUYIN_USER_AGENT", "").strip()
+                if user_agent:
+                    await cdp.command("Network.setUserAgentOverride", {"userAgent": user_agent})
+
+            # Legacy bootstrap only. Douyin's current browser search can use state
+            # from browser storage and generated headers without sending Cookie on
+            # the search XHR itself, so VideoGet never treats this as auth proof.
+            cookie_pairs: list[tuple[str, str]] = []
+            if inject_legacy_cookie:
+                cookie_pairs = parse_cookie_header(os.getenv("DOUYIN_COOKIE", ""))
+                for name, value in cookie_pairs:
+                    try:
+                        await cdp.command(
+                            "Network.setCookie",
+                            {
+                                "name": name,
+                                "value": value,
+                                "domain": ".douyin.com",
+                                "path": "/",
+                                "secure": True,
+                            },
+                        )
+                    except Exception as exc:
+                        print(f"warning: failed to inject legacy cookie {name}: {exc}", file=sys.stderr)
+
+            await cdp.command("Page.navigate", {"url": page_url})
+
+            api_bodies: list[str] = []
+            target_requests: set[str] = set()
+            completed_requests: set[str] = set()
+            captured_urls: list[str] = []
+            deadline = time.monotonic() + args.render_seconds
+            next_scroll = time.monotonic() + 2.5
+            scrolls = 0
+            final_url = page_url
+            title = ""
+
+            while time.monotonic() < deadline and len(api_bodies) < args.max_pages:
+                timeout = min(0.4, max(0.05, deadline - time.monotonic()))
+                try:
+                    event = await asyncio.wait_for(cdp.events.get(), timeout=timeout)
+                except asyncio.TimeoutError:
+                    event = None
+
+                if event:
+                    method = event.get("method")
+                    params = event.get("params") or {}
+                    if method == "Network.responseReceived":
+                        response = params.get("response") or {}
+                        response_url = str(response.get("url") or "")
+                        mime_type = str(response.get("mimeType") or "")
+                        request_id = str(params.get("requestId") or "")
+                        if request_id and is_search_response_url(response_url, mime_type):
+                            target_requests.add(request_id)
+                            if response_url not in captured_urls:
+                                captured_urls.append(response_url)
+                    elif method == "Network.loadingFinished":
+                        request_id = str(params.get("requestId") or "")
+                        if request_id in target_requests and request_id not in completed_requests:
+                            completed_requests.add(request_id)
+                            try:
+                                body_result = await cdp.command(
+                                    "Network.getResponseBody", {"requestId": request_id}
+                                )
+                                body = str(body_result.get("body") or "")
+                                if body_result.get("base64Encoded"):
+                                    body = base64.b64decode(body).decode(
+                                        "utf-8", errors="replace"
+                                    )
+                                if body:
+                                    api_bodies.append(body)
+                            except Exception as exc:
+                                print(
+                                    f"warning: could not read Douyin search response: {exc}",
+                                    file=sys.stderr,
+                                )
+                    elif method == "Network.loadingFailed":
+                        target_requests.discard(str(params.get("requestId") or ""))
+
+                now = time.monotonic()
+                if now >= next_scroll and scrolls < args.scrolls:
+                    scrolls += 1
+                    next_scroll = now + 2.0
+                    try:
+                        await cdp.command(
+                            "Runtime.evaluate",
+                            {
+                                "expression": (
+                                    "window.scrollTo(0, Math.max(document.body.scrollHeight,"
+                                    " document.documentElement.scrollHeight)); true"
+                                ),
+                                "returnByValue": True,
+                            },
+                        )
+                    except Exception:
+                        pass
+
+            dom = ""
+            video_links: list[str] = []
+            local_storage_count = 0
+            session_storage_count = 0
+            has_indexed_db = False
+            try:
+                result = await cdp.command(
+                    "Runtime.evaluate",
+                    {
+                        "expression": """({
+                            html: document.documentElement.outerHTML,
+                            url: location.href,
+                            title: document.title,
+                            videoLinks: Array.from(document.querySelectorAll('a[href*="/video/"]'))
+                                .map(a => a.href)
+                                .filter(Boolean),
+                            localStorageCount: localStorage.length,
+                            sessionStorageCount: sessionStorage.length,
+                            hasIndexedDB: !!window.indexedDB
+                        })""",
+                        "returnByValue": True,
+                    },
+                )
+                value = (((result.get("result") or {}).get("value")) or {})
+                dom = str(value.get("html") or "")
+                final_url = str(value.get("url") or final_url)
+                title = str(value.get("title") or "")
+                video_links = [str(item) for item in (value.get("videoLinks") or []) if item]
+                local_storage_count = int(value.get("localStorageCount") or 0)
+                session_storage_count = int(value.get("sessionStorageCount") or 0)
+                has_indexed_db = bool(value.get("hasIndexedDB"))
+            except Exception:
+                pass
+
+            if len(dom.encode("utf-8", errors="ignore")) > args.dom_max_bytes:
+                dom = ""
+
+            browser_cookie_count = 0
+            cookie_names: list[str] = []
+            try:
+                cookie_result = await cdp.command("Network.getAllCookies")
+                browser_cookies = cookie_result.get("cookies") or []
+                browser_cookie_count = len(browser_cookies)
+                cookie_names = sorted(
+                    {
+                        str(item.get("name") or "")
+                        for item in browser_cookies
+                        if item.get("name")
+                    }
+                )
+            except Exception:
+                pass
+
+            return {
+                "apiBodies": api_bodies,
+                "videoLinks": video_links,
+                "dom": dom,
+                "finalUrl": final_url,
+                "title": title,
+                "cookieCount": browser_cookie_count,
+                "cookieNames": cookie_names,
+                "capturedSearchUrls": captured_urls[:20],
+                "profilePersistent": session_source != "temporary-profile",
+                "sessionSource": session_source,
+                "localStorageCount": local_storage_count,
+                "sessionStorageCount": session_storage_count,
+                "hasIndexedDB": has_indexed_db,
+            }
+        finally:
+            await cdp.close()
+
+
 async def capture(args: argparse.Namespace) -> dict[str, Any]:
+    keyword_path = quote(args.keyword, safe="")
+    page_url = f"https://www.douyin.com/search/{keyword_path}?type=general"
+
+    remote_cdp = os.getenv("DOUYIN_CDP_URL", "").strip()
+    if remote_cdp:
+        async with aiohttp.ClientSession() as session:
+            target = await open_remote_target(session, remote_cdp, page_url, args.timeout)
+            created_target_id = str(target.get("id") or "")
+            try:
+                return await capture_target(
+                    session,
+                    target,
+                    args,
+                    page_url,
+                    session_source="remote-cdp",
+                    inject_legacy_cookie=False,
+                )
+            finally:
+                await close_remote_target(session, remote_cdp, created_target_id)
+
     browser = browser_binary(args.browser_bin)
     port = free_port()
-
     configured_profile = os.getenv("DOUYIN_NATIVE_SEARCH_PROFILE_DIR", "").strip() or os.getenv(
         "DOUYIN_BROWSER_PROFILE_DIR", ""
     ).strip()
     download_dir = os.getenv("DOWNLOAD_DIR", "").strip()
     if not configured_profile and download_dir:
-        # Standard Docker maps DOWNLOAD_DIR to a persistent host volume. Keeping
-        # the browser profile here lets Douyin rotate its own short-lived tokens
-        # between searches instead of rebuilding a stateless session every time.
         configured_profile = str(Path(download_dir) / ".douyin-profile")
 
     temp_profile_dir: str | None = None
     if configured_profile:
         profile_dir = configured_profile
         Path(profile_dir).mkdir(parents=True, exist_ok=True)
+        session_source = "persistent-profile"
     else:
         temp_profile_dir = tempfile.mkdtemp(prefix="videoget-douyin-cdp-")
         profile_dir = temp_profile_dir
+        session_source = "temporary-profile"
 
     command = [
         browser,
@@ -241,8 +534,6 @@ async def capture(args: argparse.Namespace) -> dict[str, Any]:
         command.extend(extra.split())
     command.append("about:blank")
 
-    # New process group lets us terminate Chromium plus renderer/network children.
-    # DEVNULL avoids Chromium stderr filling a pipe and stalling the helper.
     process = subprocess.Popen(
         command,
         stdout=subprocess.DEVNULL,
@@ -252,161 +543,17 @@ async def capture(args: argparse.Namespace) -> dict[str, Any]:
     try:
         async with aiohttp.ClientSession() as session:
             target = await wait_for_target(session, port, min(args.timeout, 10.0))
-            async with session.ws_connect(
-                target["webSocketDebuggerUrl"],
-                origin="http://127.0.0.1",
-                timeout=10.0,
-                max_msg_size=64 * 1024 * 1024,
-            ) as ws:
-                cdp = CDP(ws)
-                try:
-                    await cdp.command("Network.enable", {"maxTotalBufferSize": 64 * 1024 * 1024})
-                    await cdp.command("Page.enable")
-                    await cdp.command("Runtime.enable")
-
-                    user_agent = os.getenv("DOUYIN_USER_AGENT", "").strip()
-                    if user_agent:
-                        await cdp.command("Network.setUserAgentOverride", {"userAgent": user_agent})
-
-                    cookie_pairs = parse_cookie_header(os.getenv("DOUYIN_COOKIE", ""))
-                    for name, value in cookie_pairs:
-                        try:
-                            await cdp.command(
-                                "Network.setCookie",
-                                {
-                                    "name": name,
-                                    "value": value,
-                                    "domain": ".douyin.com",
-                                    "path": "/",
-                                    "secure": True,
-                                },
-                            )
-                        except Exception as exc:
-                            print(f"warning: failed to inject cookie {name}: {exc}", file=sys.stderr)
-
-                    keyword_path = quote(args.keyword, safe="")
-                    page_url = f"https://www.douyin.com/search/{keyword_path}?type=general"
-                    await cdp.command("Page.navigate", {"url": page_url})
-
-                    api_bodies: list[str] = []
-                    target_requests: set[str] = set()
-                    completed_requests: set[str] = set()
-                    captured_urls: list[str] = []
-                    deadline = time.monotonic() + args.render_seconds
-                    next_scroll = time.monotonic() + 2.5
-                    scrolls = 0
-                    final_url = page_url
-                    title = ""
-
-                    while time.monotonic() < deadline and len(api_bodies) < args.max_pages:
-                        timeout = min(0.4, max(0.05, deadline - time.monotonic()))
-                        try:
-                            event = await asyncio.wait_for(cdp.events.get(), timeout=timeout)
-                        except asyncio.TimeoutError:
-                            event = None
-
-                        if event:
-                            method = event.get("method")
-                            params = event.get("params") or {}
-                            if method == "Network.responseReceived":
-                                response = params.get("response") or {}
-                                response_url = str(response.get("url") or "")
-                                mime_type = str(response.get("mimeType") or "")
-                                request_id = str(params.get("requestId") or "")
-                                if request_id and is_search_response_url(response_url, mime_type):
-                                    target_requests.add(request_id)
-                                    if response_url not in captured_urls:
-                                        captured_urls.append(response_url)
-                            elif method == "Network.loadingFinished":
-                                request_id = str(params.get("requestId") or "")
-                                if request_id in target_requests and request_id not in completed_requests:
-                                    completed_requests.add(request_id)
-                                    try:
-                                        body_result = await cdp.command("Network.getResponseBody", {"requestId": request_id})
-                                        body = str(body_result.get("body") or "")
-                                        if body_result.get("base64Encoded"):
-                                            body = base64.b64decode(body).decode("utf-8", errors="replace")
-                                        if body:
-                                            api_bodies.append(body)
-                                    except Exception as exc:
-                                        print(f"warning: could not read Douyin search response: {exc}", file=sys.stderr)
-                            elif method == "Network.loadingFailed":
-                                target_requests.discard(str(params.get("requestId") or ""))
-
-                        now = time.monotonic()
-                        if now >= next_scroll and scrolls < args.scrolls:
-                            scrolls += 1
-                            next_scroll = now + 2.0
-                            try:
-                                await cdp.command(
-                                    "Runtime.evaluate",
-                                    {
-                                        "expression": "window.scrollTo(0, Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)); true",
-                                        "returnByValue": True,
-                                    },
-                                )
-                            except Exception:
-                                pass
-
-                    try:
-                        result = await cdp.command(
-                            "Runtime.evaluate",
-                            {
-                                "expression": """({
-                                    html: document.documentElement.outerHTML,
-                                    url: location.href,
-                                    title: document.title,
-                                    videoLinks: Array.from(document.querySelectorAll('a[href*="/video/"]'))
-                                        .map(a => a.href)
-                                        .filter(Boolean)
-                                })""",
-                                "returnByValue": True,
-                            },
-                        )
-                        value = (((result.get("result") or {}).get("value")) or {})
-                        dom = str(value.get("html") or "")
-                        final_url = str(value.get("url") or final_url)
-                        title = str(value.get("title") or "")
-                        raw_video_links = value.get("videoLinks") or []
-                        video_links = [str(item) for item in raw_video_links if item]
-                    except Exception:
-                        dom = ""
-                        video_links = []
-
-                    if len(dom.encode("utf-8", errors="ignore")) > args.dom_max_bytes:
-                        dom = ""
-
-                    browser_cookie_count = len(cookie_pairs)
-                    cookie_names: list[str] = []
-                    try:
-                        cookie_result = await cdp.command("Network.getAllCookies")
-                        browser_cookies = cookie_result.get("cookies") or []
-                        browser_cookie_count = len(browser_cookies)
-                        cookie_names = sorted({
-                            str(item.get("name") or "")
-                            for item in browser_cookies
-                            if item.get("name")
-                        })
-                    except Exception:
-                        pass
-
-                    return {
-                        "apiBodies": api_bodies,
-                        "videoLinks": video_links,
-                        "dom": dom,
-                        "finalUrl": final_url,
-                        "title": title,
-                        "cookieCount": browser_cookie_count,
-                        "cookieNames": cookie_names,
-                        "capturedSearchUrls": captured_urls[:20],
-                        "profilePersistent": temp_profile_dir is None,
-                    }
-                finally:
-                    await cdp.close()
+            return await capture_target(
+                session,
+                target,
+                args,
+                page_url,
+                session_source=session_source,
+                inject_legacy_cookie=True,
+            )
     finally:
         stop_browser_tree(process)
         cleanup_temp_profile(temp_profile_dir)
-
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
