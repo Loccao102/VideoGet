@@ -232,11 +232,13 @@ BILIBILI_COOKIE=
 
 Cookie phải lấy từ chính browser session mà bạn có quyền sử dụng. Không commit cookie thật lên GitHub.
 
-Douyin không còn yêu cầu `douyin-cli` hoặc `yt-dlp`. Cookie là optional cho share-page resolver nhưng có thể tăng độ ổn định khi Douyin áp dụng risk-control.
+Douyin không còn yêu cầu `douyin-cli` hoặc `yt-dlp`. Native search coi browser state là nguồn thật; một request search không cần có `Cookie:` header. Nếu có Chrome/Chromium đã login, ưu tiên attach qua `DOUYIN_CDP_URL`; `DOUYIN_COOKIE` chỉ còn là bootstrap/compatibility fallback.
 
 Các biến Douyin chính:
 
 ```env
+DOUYIN_CDP_URL=
+DOUYIN_NATIVE_SEARCH_PROFILE_DIR=/app/downloads/.douyin-profile
 DOUYIN_MOBILE_USER_AGENT=Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) ...
 DOUYIN_RESOLVE_TIMEOUT_SEC=18
 DOUYIN_PAGE_TIMEOUT_SEC=25
@@ -401,7 +403,9 @@ downloads/
 | `JOB_DB_PATH` | `/app/downloads/videoget.db` | SQLite job store |
 | `DOWNLOAD_CONCURRENCY` | `3` | download đồng thời |
 | `JOB_TIMEOUT_MINUTES` | `180` | timeout toàn job |
-| `DOUYIN_COOKIE` | trống | session Douyin, optional |
+| `DOUYIN_CDP_URL` | trống | attach vào browser Douyin đã login; preferred cho native search |
+| `DOUYIN_NATIVE_SEARCH_PROFILE_DIR` | `/app/downloads/.douyin-profile` | persistent browser profile fallback |
+| `DOUYIN_COOKIE` | trống | legacy/bootstrap fallback; không dùng làm proof rằng API gửi Cookie |
 | `DOUYIN_SEARCH_TIMEOUT_SEC` | `20` | timeout discovery Douyin public index |
 | `DOUYIN_RESOLVE_TIMEOUT_SEC` | `18` | timeout resolve short link / aweme id |
 | `DOUYIN_PAGE_TIMEOUT_SEC` | `25` | timeout lấy iesdouyin share page |

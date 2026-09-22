@@ -49,6 +49,7 @@ type douyinBrowserSearchPayload struct {
 	RequestHeaderNames []string `json:"requestHeaderNames"`
 	CapturedSearchURLs []string `json:"capturedSearchUrls"`
 	ProfilePersistent  bool     `json:"profilePersistent"`
+	SessionSource      string   `json:"sessionSource"`
 	Error              string   `json:"error"`
 }
 
@@ -118,10 +119,11 @@ func (p *DouyinProvider) searchNativeBrowser(ctx context.Context, keyword string
 		// web search can keep identity/session material in the browser profile and
 		// generate request tokens/headers without attaching Cookie to each API call.
 		return nil, fmt.Errorf(
-			"native Douyin search rendered %q (%s) but found no videos for %q (browser_cookies=%d, local_storage_keys=%d, session_storage_keys=%d, search_header_names=%d, captured_search_responses=%d, persistent_profile=%t)",
+			"native Douyin search rendered %q (%s) but found no videos for %q (session_source=%s, browser_cookies=%d, local_storage_keys=%d, session_storage_keys=%d, search_header_names=%d, captured_search_responses=%d, persistent_profile=%t)",
 			payload.Title,
 			payload.FinalURL,
 			keyword,
+			strings.TrimSpace(payload.SessionSource),
 			payload.CookieCount,
 			len(payload.LocalStorageKeys),
 			len(payload.SessionStorageKeys),
@@ -148,9 +150,15 @@ func (p *DouyinProvider) searchNativeBrowser(ctx context.Context, keyword string
 
 func fetchDouyinSearchPayload(ctx context.Context, keyword string) (douyinBrowserSearchPayload, error) {
 	var payload douyinBrowserSearchPayload
-	browser, err := findDouyinSearchBrowserBinary()
-	if err != nil {
-		return payload, err
+	browser := strings.TrimSpace(os.Getenv("DOUYIN_BROWSER_BIN"))
+	if strings.TrimSpace(os.Getenv("DOUYIN_CDP_URL")) == "" {
+		var err error
+		browser, err = findDouyinSearchBrowserBinary()
+		if err != nil {
+			return payload, err
+		}
+	} else if browser == "" {
+		browser = "chromium"
 	}
 	python, err := findDouyinSearchPython()
 	if err != nil {
