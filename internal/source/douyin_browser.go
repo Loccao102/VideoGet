@@ -146,9 +146,17 @@ func (p *DouyinProvider) searchNativeBrowser(ctx context.Context, keyword string
 
 func fetchDouyinSearchPayload(ctx context.Context, keyword string) (douyinBrowserSearchPayload, error) {
 	var payload douyinBrowserSearchPayload
-	browser, err := findDouyinSearchBrowserBinary()
-	if err != nil {
-		return payload, err
+	browser := strings.TrimSpace(os.Getenv("DOUYIN_BROWSER_BIN"))
+	if strings.TrimSpace(os.Getenv("DOUYIN_CDP_URL")) == "" {
+		var err error
+		browser, err = findDouyinSearchBrowserBinary()
+		if err != nil {
+			return payload, err
+		}
+	} else if browser == "" {
+		// Remote-CDP mode does not launch a local browser; the helper still accepts
+		// --browser-bin for CLI compatibility but will not use it.
+		browser = "chromium"
 	}
 	python, err := findDouyinSearchPython()
 	if err != nil {
