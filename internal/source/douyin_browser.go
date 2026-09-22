@@ -112,7 +112,7 @@ func (p *DouyinProvider) searchNativeBrowser(ctx context.Context, keyword string
 			return nil, apiErr
 		}
 		if payload.CookieCount == 0 {
-			return nil, fmt.Errorf("native Douyin search has no browser cookies; provide DOUYIN_COOKIE once or use a persistent DOUYIN_NATIVE_SEARCH_PROFILE_DIR")
+			return nil, fmt.Errorf("native Douyin search has no browser cookies; configure DOUYIN_COOKIE or a logged-in persistent DOUYIN_NATIVE_SEARCH_PROFILE_DIR")
 		}
 		return nil, fmt.Errorf(
 			"native Douyin search rendered %q (%s) but found no videos for %q (cookies=%d, captured_search_responses=%d, persistent_profile=%t)",
@@ -407,7 +407,12 @@ func findDouyinSearchScript() (string, error) {
 		}
 		return "", fmt.Errorf("DOUYIN_NATIVE_SEARCH_SCRIPT %q was not found", configured)
 	}
-	for _, candidate := range []string{"/app/scripts/douyin_search_browser.py", "scripts/douyin_search_browser.py"} {
+	for _, candidate := range []string{
+		"/app/scripts/douyin_search_browser_v2.py",
+		"scripts/douyin_search_browser_v2.py",
+		"/app/scripts/douyin_search_browser.py",
+		"scripts/douyin_search_browser.py",
+	} {
 		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
 			return candidate, nil
 		}
