@@ -25,12 +25,17 @@ func main() {
 		log.Fatalf("load embedded web UI: %v", err)
 	}
 
-	// Douyin uses a browser-backed discovery path. Keep a hard outer budget so
-	// process cleanup/profile-lock issues can never leave /api/search waiting
-	// forever. The HTTP search layer has a 75s source budget; 55s leaves enough
-	// time to aggregate and return a structured error to the UI.
-	douyin := source.WithSearchTimeout(source.NewDouyinProvider(), 55*time.Second)
-	providers := []source.Provider{source.NewBilibiliProvider(), douyin}
+	providers := []source.Provider{
+		source.NewKuaishouProvider(),
+		source.NewBilibiliProvider(),
+	}
+	// Douyin is now opt-in. Its current web runtime is significantly more
+	// sensitive to browser/device state than the other sources and should not
+	// slow every search when a deployment does not explicitly want it.
+	if envBool("DOUYIN_ENABLED", false) {
+		douyin := source.WithSearchTimeout(source.NewDouyinProvider(), 55*time.Second)
+		providers = append(providers, douyin)
+	}
 	providers = append(providers, source.NewPublicShortProviders()...)
 	jobs, err := download.NewManager(downloadDir)
 	if err != nil {
@@ -55,6 +60,14 @@ func main() {
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
+}
+
+func envBool(key string, fallback bool) bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	if value == "" {
+		return fallback
+	}
+	return value != "0" && value != "false" && value != "no" && value != "off"
 }
 
 func env(key, fallback string) string {
