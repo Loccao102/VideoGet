@@ -32,6 +32,7 @@ if ($BindAddress -ne "127.0.0.1" -and $BindAddress -ne "localhost") {
 $args = @(
     "--remote-debugging-port=$Port",
     "--remote-debugging-address=$BindAddress",
+    "--remote-allow-origins=*",
     "--user-data-dir=$ProfileDir",
     "--no-first-run",
     "--no-default-browser-check",
