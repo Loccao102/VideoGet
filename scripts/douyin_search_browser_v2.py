@@ -188,6 +188,7 @@ async def open_remote_target(
                     target["webSocketDebuggerUrl"] = rewrite_remote_ws_url(
                         str(target["webSocketDebuggerUrl"]), base
                     )
+                    target["_videogetCreated"] = True
                     return target
     except Exception as exc:
         last_error = exc
@@ -211,6 +212,7 @@ async def open_remote_target(
                 preferred["webSocketDebuggerUrl"] = rewrite_remote_ws_url(
                     str(preferred["webSocketDebuggerUrl"]), base
                 )
+                preferred["_videogetCreated"] = False
                 return preferred
     except Exception as exc:
         last_error = exc
@@ -480,7 +482,9 @@ async def capture(args: argparse.Namespace) -> dict[str, Any]:
     if remote_cdp:
         async with aiohttp.ClientSession() as session:
             target = await open_remote_target(session, remote_cdp, page_url, args.timeout)
-            created_target_id = str(target.get("id") or "")
+            created_target_id = (
+                str(target.get("id") or "") if target.get("_videogetCreated") else ""
+            )
             try:
                 return await capture_target(
                     session,
