@@ -223,20 +223,36 @@ WHISPER_NUM_WORKERS=1
 
 Nếu worker gặp lỗi hạ tầng, `LOCALIZE_WORKER_FALLBACK=true` cho phép VideoGet quay về one-shot processor. Lỗi nội dung của chính job không bị chạy lại vô ích bằng fallback.
 
-### Cookies
+### Douyin browser state + cookies
+
+Douyin native search không còn giả định rằng request search phải có `Cookie:` header. Trạng thái phiên được giao cho chính browser quản lý (cookies/localStorage/IndexedDB/browser-generated token/signature).
+
+Ưu tiên dùng một Chrome/Chromium đã đăng nhập và cho VideoGet attach qua CDP:
+
+```env
+DOUYIN_CDP_URL=http://host.docker.internal:9222
+```
+
+Có helper Windows:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start_douyin_chrome.ps1
+```
+
+Đăng nhập Douyin một lần trong browser riêng đó và giữ browser chạy khi search. `DOUYIN_COOKIE` chỉ còn là bootstrap/compatibility fallback cho browser do VideoGet tự launch; không phải nguồn auth chính của native search.
 
 ```env
 DOUYIN_COOKIE=
 BILIBILI_COOKIE=
 ```
 
-Cookie phải lấy từ chính browser session mà bạn có quyền sử dụng. Không commit cookie thật lên GitHub.
-
-Douyin không còn yêu cầu `douyin-cli` hoặc `yt-dlp`. Cookie là optional cho share-page resolver nhưng có thể tăng độ ổn định khi Douyin áp dụng risk-control.
+Không commit cookie/profile thật lên GitHub. DevTools port có quyền điều khiển browser nên không expose ra mạng không tin cậy.
 
 Các biến Douyin chính:
 
 ```env
+DOUYIN_CDP_URL=
+DOUYIN_NATIVE_SEARCH_PROFILE_DIR=/app/downloads/.douyin-profile
 DOUYIN_MOBILE_USER_AGENT=Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) ...
 DOUYIN_RESOLVE_TIMEOUT_SEC=18
 DOUYIN_PAGE_TIMEOUT_SEC=25
@@ -401,7 +417,9 @@ downloads/
 | `JOB_DB_PATH` | `/app/downloads/videoget.db` | SQLite job store |
 | `DOWNLOAD_CONCURRENCY` | `3` | download đồng thời |
 | `JOB_TIMEOUT_MINUTES` | `180` | timeout toàn job |
-| `DOUYIN_COOKIE` | trống | session Douyin, optional |
+| `DOUYIN_CDP_URL` | trống | attach vào browser Douyin đã có đầy đủ browser state; preferred cho native search |
+| `DOUYIN_NATIVE_SEARCH_PROFILE_DIR` | `/app/downloads/.douyin-profile` | persistent profile khi VideoGet tự launch Chromium |
+| `DOUYIN_COOKIE` | trống | legacy/bootstrap fallback; native search không yêu cầu Cookie header |
 | `DOUYIN_SEARCH_TIMEOUT_SEC` | `20` | timeout discovery Douyin public index |
 | `DOUYIN_RESOLVE_TIMEOUT_SEC` | `18` | timeout resolve short link / aweme id |
 | `DOUYIN_PAGE_TIMEOUT_SEC` | `25` | timeout lấy iesdouyin share page |
@@ -443,7 +461,7 @@ Go API
    |     +-- Ollama keyword expander
    |
    +-- Source adapters
-   |     +-- Douyin search -> public web index
+   |     +-- Douyin search -> public index -> browser-state CDP -> network/video-link/DOM fallback
    |     +-- Douyin download -> iesdouyin _ROUTER_DATA -> direct CDN/play URL
    |     +-- Bilibili search -> bili CLI
    |     +-- Bilibili download -> yt-dlp
@@ -473,7 +491,7 @@ Go API
 2. **Media Library**: preview original/final, transcript, subtitle, timing và re-render.
 3. **Affiliate Analyzer**: cluster nhiều video thành sản phẩm/ngách, phân tích pain point, hook, selling point và độ phù hợp affiliate Việt Nam.
 4. **Render acceleration**: tùy phần cứng có thể thêm NVENC/Quick Sync profile thay cho `libx264` CPU.
-5. Nếu `iesdouyin _ROUTER_DATA` bị loại bỏ trong tương lai, thêm browser-network-interception fallback riêng cho Douyin thay vì làm browser trở thành dependency mặc định.
+5. **Douyin browser-state hardening**: tiếp tục ưu tiên CDP/session thật, quan sát network/DOM thay vì clone token/header của web app khi Douyin đổi anti-bot.
 
 ## Third-party & sử dụng nội dung
 
