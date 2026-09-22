@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Douyin native search through Chromium CDP with safe browser lifecycle.
+"""Douyin native search through Chromium CDP with a persistent browser session.
 
-This helper lets Douyin's own page generate the signed native-search request,
-injects an optional authenticated cookie, captures search API response bodies,
-and never lets temporary-profile cleanup overwrite a successful result.
+Douyin changes its web search endpoints and short-lived browser tokens often.
+This helper therefore lets Douyin's own page create signed requests, keeps a
+persistent Chromium profile when VideoGet has a download directory, captures
+multiple search-response shapes, and also harvests rendered /video/ links as a
+fallback. Cookie values are never printed.
 """
 
 from __future__ import annotations
@@ -26,7 +28,28 @@ from urllib.parse import quote
 
 import aiohttp
 
-SEARCH_ENDPOINT = "/aweme/v1/web/general/search/single/"
+KNOWN_SEARCH_MARKERS = (
+    "/aweme/v1/web/general/search/",
+    "/aweme/v1/web/search/",
+    "/aweme/v1/web/search/item/",
+    "/aweme/v1/web/search/single/",
+)
+
+
+def is_search_response_url(response_url: str, mime_type: str = "") -> bool:
+    """Return True for Douyin JSON/XHR responses that can contain search items."""
+    lowered = response_url.lower()
+    if "douyin.com" not in lowered:
+        return False
+    if any(marker in lowered for marker in KNOWN_SEARCH_MARKERS):
+        return True
+    # Endpoint names drift. Keep this deliberately broad but limited to Douyin
+    # aweme/search traffic so unrelated page resources are not buffered.
+    if "/aweme/" in lowered and "search" in lowered:
+        return True
+    if "/search/" in lowered and ("application/json" in mime_type.lower() or "json" in mime_type.lower()):
+        return True
+    return False
 
 
 def free_port() -> int:
@@ -181,6 +204,13 @@ async def capture(args: argparse.Namespace) -> dict[str, Any]:
     configured_profile = os.getenv("DOUYIN_NATIVE_SEARCH_PROFILE_DIR", "").strip() or os.getenv(
         "DOUYIN_BROWSER_PROFILE_DIR", ""
     ).strip()
+    download_dir = os.getenv("DOWNLOAD_DIR", "").strip()
+    if not configured_profile and download_dir:
+        # Standard Docker maps DOWNLOAD_DIR to a persistent host volume. Keeping
+        # the browser profile here lets Douyin rotate its own short-lived tokens
+        # between searches instead of rebuilding a stateless session every time.
+        configured_profile = str(Path(download_dir) / ".douyin-profile")
+
     temp_profile_dir: str | None = None
     if configured_profile:
         profile_dir = configured_profile
@@ -261,6 +291,7 @@ async def capture(args: argparse.Namespace) -> dict[str, Any]:
                     api_bodies: list[str] = []
                     target_requests: set[str] = set()
                     completed_requests: set[str] = set()
+                    captured_urls: list[str] = []
                     deadline = time.monotonic() + args.render_seconds
                     next_scroll = time.monotonic() + 2.5
                     scrolls = 0
@@ -280,9 +311,12 @@ async def capture(args: argparse.Namespace) -> dict[str, Any]:
                             if method == "Network.responseReceived":
                                 response = params.get("response") or {}
                                 response_url = str(response.get("url") or "")
+                                mime_type = str(response.get("mimeType") or "")
                                 request_id = str(params.get("requestId") or "")
-                                if SEARCH_ENDPOINT in response_url and request_id:
+                                if request_id and is_search_response_url(response_url, mime_type):
                                     target_requests.add(request_id)
+                                    if response_url not in captured_urls:
+                                        captured_urls.append(response_url)
                             elif method == "Network.loadingFinished":
                                 request_id = str(params.get("requestId") or "")
                                 if request_id in target_requests and request_id not in completed_requests:
@@ -318,7 +352,14 @@ async def capture(args: argparse.Namespace) -> dict[str, Any]:
                         result = await cdp.command(
                             "Runtime.evaluate",
                             {
-                                "expression": "({html:document.documentElement.outerHTML,url:location.href,title:document.title})",
+                                "expression": """({
+                                    html: document.documentElement.outerHTML,
+                                    url: location.href,
+                                    title: document.title,
+                                    videoLinks: Array.from(document.querySelectorAll('a[href*="/video/"]'))
+                                        .map(a => a.href)
+                                        .filter(Boolean)
+                                })""",
                                 "returnByValue": True,
                             },
                         )
@@ -326,18 +367,39 @@ async def capture(args: argparse.Namespace) -> dict[str, Any]:
                         dom = str(value.get("html") or "")
                         final_url = str(value.get("url") or final_url)
                         title = str(value.get("title") or "")
+                        raw_video_links = value.get("videoLinks") or []
+                        video_links = [str(item) for item in raw_video_links if item]
                     except Exception:
                         dom = ""
+                        video_links = []
 
                     if len(dom.encode("utf-8", errors="ignore")) > args.dom_max_bytes:
                         dom = ""
 
+                    browser_cookie_count = len(cookie_pairs)
+                    cookie_names: list[str] = []
+                    try:
+                        cookie_result = await cdp.command("Network.getAllCookies")
+                        browser_cookies = cookie_result.get("cookies") or []
+                        browser_cookie_count = len(browser_cookies)
+                        cookie_names = sorted({
+                            str(item.get("name") or "")
+                            for item in browser_cookies
+                            if item.get("name")
+                        })
+                    except Exception:
+                        pass
+
                     return {
                         "apiBodies": api_bodies,
+                        "videoLinks": video_links,
                         "dom": dom,
                         "finalUrl": final_url,
                         "title": title,
-                        "cookieCount": len(cookie_pairs),
+                        "cookieCount": browser_cookie_count,
+                        "cookieNames": cookie_names,
+                        "capturedSearchUrls": captured_urls[:20],
+                        "profilePersistent": temp_profile_dir is None,
                     }
                 finally:
                     await cdp.close()
