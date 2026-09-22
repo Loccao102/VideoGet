@@ -44,6 +44,9 @@ type douyinBrowserSearchPayload struct {
 	Title              string   `json:"title"`
 	CookieCount        int      `json:"cookieCount"`
 	CookieNames        []string `json:"cookieNames"`
+	LocalStorageKeys   []string `json:"localStorageKeys"`
+	SessionStorageKeys []string `json:"sessionStorageKeys"`
+	RequestHeaderNames []string `json:"requestHeaderNames"`
 	CapturedSearchURLs []string `json:"capturedSearchUrls"`
 	ProfilePersistent  bool     `json:"profilePersistent"`
 	Error              string   `json:"error"`
@@ -111,15 +114,18 @@ func (p *DouyinProvider) searchNativeBrowser(ctx context.Context, keyword string
 		if apiErr != nil {
 			return nil, apiErr
 		}
-		if payload.CookieCount == 0 {
-			return nil, fmt.Errorf("native Douyin search has no browser cookies; configure DOUYIN_COOKIE or a logged-in persistent DOUYIN_NATIVE_SEARCH_PROFILE_DIR")
-		}
+		// Do not infer authentication from a Cookie request header. Current Douyin
+		// web search can keep identity/session material in the browser profile and
+		// generate request tokens/headers without attaching Cookie to each API call.
 		return nil, fmt.Errorf(
-			"native Douyin search rendered %q (%s) but found no videos for %q (cookies=%d, captured_search_responses=%d, persistent_profile=%t)",
+			"native Douyin search rendered %q (%s) but found no videos for %q (browser_cookies=%d, local_storage_keys=%d, session_storage_keys=%d, search_header_names=%d, captured_search_responses=%d, persistent_profile=%t)",
 			payload.Title,
 			payload.FinalURL,
 			keyword,
 			payload.CookieCount,
+			len(payload.LocalStorageKeys),
+			len(payload.SessionStorageKeys),
+			len(payload.RequestHeaderNames),
 			len(payload.CapturedSearchURLs),
 			payload.ProfilePersistent,
 		)
