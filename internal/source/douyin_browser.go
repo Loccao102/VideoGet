@@ -37,12 +37,16 @@ var (
 )
 
 type douyinBrowserSearchPayload struct {
-	APIBodies   []string `json:"apiBodies"`
-	DOM         string   `json:"dom"`
-	FinalURL    string   `json:"finalUrl"`
-	Title       string   `json:"title"`
-	CookieCount int      `json:"cookieCount"`
-	Error       string   `json:"error"`
+	APIBodies          []string `json:"apiBodies"`
+	VideoLinks         []string `json:"videoLinks"`
+	DOM                string   `json:"dom"`
+	FinalURL           string   `json:"finalUrl"`
+	Title              string   `json:"title"`
+	CookieCount        int      `json:"cookieCount"`
+	CookieNames        []string `json:"cookieNames"`
+	CapturedSearchURLs []string `json:"capturedSearchUrls"`
+	ProfilePersistent  bool     `json:"profilePersistent"`
+	Error              string   `json:"error"`
 }
 
 type douyinNativeSearchResponse struct {
@@ -92,16 +96,30 @@ func (p *DouyinProvider) searchNativeBrowser(ctx context.Context, keyword string
 		if apiErr != nil {
 			return nil, apiErr
 		}
+		if len(payload.VideoLinks) > 0 {
+			results = parseDouyinVideoLinks(payload.VideoLinks, keyword, limit)
+			if len(results) > 0 {
+				return results, nil
+			}
+		}
 		if payload.DOM != "" {
 			results = parseDouyinSearchDOM(payload.DOM, keyword, limit)
 			if len(results) > 0 {
 				return results, nil
 			}
 		}
-		if payload.CookieCount == 0 && strings.TrimSpace(os.Getenv("DOUYIN_NATIVE_SEARCH_PROFILE_DIR")) == "" && strings.TrimSpace(os.Getenv("DOUYIN_BROWSER_PROFILE_DIR")) == "" {
-			return nil, fmt.Errorf("native Douyin search requires an authenticated session; set DOUYIN_COOKIE or DOUYIN_NATIVE_SEARCH_PROFILE_DIR")
+		if payload.CookieCount == 0 {
+			return nil, fmt.Errorf("native Douyin search has no browser cookies; provide DOUYIN_COOKIE once or use a persistent DOUYIN_NATIVE_SEARCH_PROFILE_DIR")
 		}
-		return nil, fmt.Errorf("native Douyin search rendered %q (%s) but returned no search API results for %q", payload.Title, payload.FinalURL, keyword)
+		return nil, fmt.Errorf(
+			"native Douyin search rendered %q (%s) but found no videos for %q (cookies=%d, captured_search_responses=%d, persistent_profile=%t)",
+			payload.Title,
+			payload.FinalURL,
+			keyword,
+			payload.CookieCount,
+			len(payload.CapturedSearchURLs),
+			payload.ProfilePersistent,
+		)
 	}
 
 	// Keep the older DOM-only path as a compatibility fallback for local installs
@@ -186,59 +204,29 @@ func parseDouyinSearchAPIBodies(bodies []string, keyword string, limit int) ([]m
 		if body == "" {
 			continue
 		}
-		var response douyinNativeSearchResponse
-		if err := json.Unmarshal([]byte(body), &response); err != nil {
+
+		var root any
+		if err := json.Unmarshal([]byte(body), &root); err != nil {
 			continue
 		}
-		if response.StatusCode == 2483 {
-			loginRequired = true
-			continue
-		}
-		if response.StatusCode != 0 {
-			statusErrors = append(statusErrors, fmt.Sprintf("status %d: %s", response.StatusCode, strings.TrimSpace(response.StatusMsg)))
-			continue
-		}
-		for _, item := range response.Data {
-			aweme := item.AwemeInfo
-			if aweme == nil || strings.TrimSpace(aweme.AwemeID) == "" {
-				continue
-			}
-			id := strings.TrimSpace(aweme.AwemeID)
-			if _, exists := seen[id]; exists {
-				continue
-			}
-			seen[id] = struct{}{}
-			video := model.Video{
-				ID:           id,
-				Platform:     "douyin",
-				Title:        strings.TrimSpace(aweme.Desc),
-				Author:       strings.TrimSpace(aweme.Author.Nickname),
-				URL:          "https://www.douyin.com/video/" + id,
-				MediaType:    "video",
-				Views:        aweme.Statistics.PlayCount,
-				Likes:        aweme.Statistics.DiggCount,
-				Comments:     aweme.Statistics.CommentCount,
-				Shares:       aweme.Statistics.ShareCount,
-				SearchSource: keyword,
-			}
-			if video.Title == "" {
-				video.Title = "Douyin search: " + keyword
-			}
-			if aweme.CreateTime > 0 {
-				published := time.Unix(aweme.CreateTime, 0).UTC()
-				video.PublishedAt = &published
-			}
-			if aweme.Video.Duration > 0 {
-				duration := aweme.Video.Duration
-				if duration >= 1000 {
-					duration /= 1000
+		if object, ok := root.(map[string]any); ok {
+			if status, ok := douyinJSONInt64(object["status_code"]); ok {
+				switch status {
+				case 0:
+					// Successful response; continue into recursive item extraction.
+				case 2483:
+					loginRequired = true
+				default:
+					message, _ := object["status_msg"].(string)
+					statusErrors = append(statusErrors, fmt.Sprintf("status %d: %s", status, strings.TrimSpace(message)))
 				}
-				video.DurationSec = duration
 			}
-			if len(aweme.Video.Cover.URLList) > 0 {
-				video.Thumbnail = aweme.Video.Cover.URLList[0]
-			}
-			results = append(results, video)
+		}
+
+		awemes := make([]douyinNativeAweme, 0, 16)
+		collectDouyinNativeAwemes(root, &awemes)
+		for i := range awemes {
+			appendDouyinAwemeResult(&results, seen, &awemes[i], keyword, limit)
 			if len(results) >= limit {
 				return results, nil
 			}
@@ -249,12 +237,149 @@ func parseDouyinSearchAPIBodies(bodies []string, keyword string, limit int) ([]m
 		return results, nil
 	}
 	if loginRequired {
-		return nil, fmt.Errorf("Douyin native search requires a logged-in DOUYIN_COOKIE (status 2483: 请先登录，再继续搜索吧)")
+		return nil, fmt.Errorf("Douyin native search requires a logged-in browser session (status 2483: 请先登录，再继续搜索吧)")
 	}
 	if len(statusErrors) > 0 {
 		return nil, fmt.Errorf("Douyin native search API returned %s", strings.Join(statusErrors, " | "))
 	}
 	return nil, nil
+}
+
+func collectDouyinNativeAwemes(value any, results *[]douyinNativeAweme) {
+	switch node := value.(type) {
+	case map[string]any:
+		if raw, ok := node["aweme_info"]; ok {
+			appendDecodedDouyinAweme(results, raw)
+		}
+		if raw, ok := node["aweme"]; ok {
+			appendDecodedDouyinAweme(results, raw)
+		}
+		if _, ok := node["aweme_id"]; ok {
+			appendDecodedDouyinAweme(results, node)
+		}
+		for key, child := range node {
+			if key == "aweme_info" || key == "aweme" {
+				continue
+			}
+			collectDouyinNativeAwemes(child, results)
+		}
+	case []any:
+		for _, child := range node {
+			collectDouyinNativeAwemes(child, results)
+		}
+	}
+}
+
+func appendDecodedDouyinAweme(results *[]douyinNativeAweme, value any) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return
+	}
+	var aweme douyinNativeAweme
+	if err := json.Unmarshal(data, &aweme); err != nil {
+		return
+	}
+	if strings.TrimSpace(aweme.AwemeID) == "" {
+		return
+	}
+	*results = append(*results, aweme)
+}
+
+func appendDouyinAwemeResult(results *[]model.Video, seen map[string]struct{}, aweme *douyinNativeAweme, keyword string, limit int) {
+	if aweme == nil || len(*results) >= limit {
+		return
+	}
+	id := strings.TrimSpace(aweme.AwemeID)
+	if id == "" {
+		return
+	}
+	if _, exists := seen[id]; exists {
+		return
+	}
+	seen[id] = struct{}{}
+
+	video := model.Video{
+		ID:           id,
+		Platform:     "douyin",
+		Title:        strings.TrimSpace(aweme.Desc),
+		Author:       strings.TrimSpace(aweme.Author.Nickname),
+		URL:          "https://www.douyin.com/video/" + id,
+		MediaType:    "video",
+		Views:        aweme.Statistics.PlayCount,
+		Likes:        aweme.Statistics.DiggCount,
+		Comments:     aweme.Statistics.CommentCount,
+		Shares:       aweme.Statistics.ShareCount,
+		SearchSource: keyword,
+	}
+	if video.Title == "" {
+		video.Title = "Douyin search: " + keyword
+	}
+	if aweme.CreateTime > 0 {
+		published := time.Unix(aweme.CreateTime, 0).UTC()
+		video.PublishedAt = &published
+	}
+	if aweme.Video.Duration > 0 {
+		duration := aweme.Video.Duration
+		if duration >= 1000 {
+			duration /= 1000
+		}
+		video.DurationSec = duration
+	}
+	if len(aweme.Video.Cover.URLList) > 0 {
+		video.Thumbnail = aweme.Video.Cover.URLList[0]
+	}
+	*results = append(*results, video)
+}
+
+func douyinJSONInt64(value any) (int64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		return int64(typed), true
+	case float32:
+		return int64(typed), true
+	case int:
+		return int64(typed), true
+	case int64:
+		return typed, true
+	case json.Number:
+		parsed, err := typed.Int64()
+		return parsed, err == nil
+	case string:
+		parsed, err := strconv.ParseInt(strings.TrimSpace(typed), 10, 64)
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func parseDouyinVideoLinks(links []string, keyword string, limit int) []model.Video {
+	if limit <= 0 {
+		limit = 10
+	}
+	seen := make(map[string]struct{}, len(links))
+	results := make([]model.Video, 0, minInt(limit, len(links)))
+	for _, link := range links {
+		id := extractDouyinVideoID(strings.TrimSpace(link))
+		if id == "" {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		results = append(results, model.Video{
+			ID:           id,
+			Platform:     "douyin",
+			Title:        "Douyin search: " + keyword,
+			URL:          "https://www.douyin.com/video/" + id,
+			MediaType:    "video",
+			SearchSource: keyword,
+		})
+		if len(results) >= limit {
+			break
+		}
+	}
+	return results
 }
 
 func findDouyinSearchPython() (string, error) {
