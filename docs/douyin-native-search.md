@@ -7,19 +7,39 @@ VideoGet uses a two-stage Douyin discovery flow:
 
 The native helper opens `https://www.douyin.com/search/{keyword}?type=general` and lets Douyin's own JavaScript create the signed browser requests. It no longer depends on one hard-coded search endpoint: it captures known `/aweme/.../search/...` responses plus compatible Douyin JSON search traffic, then falls back to rendered `/video/{aweme_id}` links and finally the DOM/hydration data.
 
-## Authentication and persistent session
+## Authentication and browser state
 
-Douyin can return status `2483` (`请先登录，再继续搜索吧`) when there is no valid authenticated session.
+Douyin can return status `2483` (`请先登录，再继续搜索吧`) when there is no valid browser session.
 
-VideoGet now prefers a persistent Chromium profile:
+A search XHR does not need to expose a visible `Cookie:` header for the browser session to matter. Douyin can use browser-managed state and generate request tokens/headers at runtime. VideoGet therefore treats the browser itself as the source of truth.
+
+### Preferred: attach to an already logged-in browser
+
+```env
+DOUYIN_CDP_URL=http://host.docker.internal:9222
+```
+
+When `DOUYIN_CDP_URL` is set, VideoGet attaches to that Chrome/Chromium DevTools endpoint. It does not inject `DOUYIN_COOKIE` and it does not override the connected browser's User-Agent. The browser keeps its own cookies, local/session storage, IndexedDB/service-worker state, fingerprint and generated request headers.
+
+On Windows a dedicated browser can be started with:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start_douyin_chrome.ps1
+```
+
+Log in to Douyin once in that dedicated browser and keep it running while VideoGet searches. The DevTools port grants browser-control access, so do not expose it to untrusted networks.
+
+### Fallback: VideoGet-managed persistent profile
+
+If `DOUYIN_CDP_URL` is empty, VideoGet launches Chromium and stores its profile at:
 
 ```env
 DOUYIN_NATIVE_SEARCH_PROFILE_DIR=/app/downloads/.douyin-profile
 ```
 
-The standard Docker configuration stores this profile inside the existing `./downloads:/app/downloads` bind mount, so cookies and browser-generated short-lived tokens can survive container restarts and can be refreshed by Douyin inside the browser context.
+The standard Docker configuration stores this profile inside the existing `./downloads:/app/downloads` bind mount, so browser-managed state can survive container restarts.
 
-`DOUYIN_COOKIE` remains only as an optional compatibility/bootstrap input for older flows or when a fresh session can be seeded this way:
+`DOUYIN_COOKIE` remains only as an optional compatibility/bootstrap input for the internally launched browser:
 
 ```env
 DOUYIN_COOKIE=ttwid=...; sessionid=...; ...
@@ -50,6 +70,7 @@ DOUYIN_NATIVE_SEARCH_RENDER_MS=9000
 DOUYIN_NATIVE_SEARCH_SCROLLS=4
 DOUYIN_NATIVE_SEARCH_MAX_PAGES=4
 DOUYIN_NATIVE_SEARCH_DOM_MAX_MB=24
+DOUYIN_CDP_URL=
 DOUYIN_NATIVE_SEARCH_PROFILE_DIR=/app/downloads/.douyin-profile
 DOUYIN_BROWSER_BIN=chromium
 DOUYIN_BROWSER_NO_SANDBOX=true
@@ -61,6 +82,7 @@ The browser is used for request signing/session execution only. Search response 
 
 If search renders but returns no videos, the error now reports:
 
+- session source (`remote-cdp`, `persistent-profile`, or `temporary-profile`);
 - browser cookie count;
 - localStorage/sessionStorage key counts;
 - search-request header-name count;
@@ -73,7 +95,7 @@ Useful interpretations:
 - storage keys/header names present but `captured_search_responses=0`: Douyin likely changed the request surface again; DOM/video-link fallback will still be attempted;
 - status `2483`: Douyin explicitly rejected the current browser session for that search request.
 
-When you rotate a leaked or expired Douyin session, stop VideoGet, remove `downloads/.douyin-profile`, provide a fresh local `DOUYIN_COOKIE`, and start the container again.
+For managed-profile mode, reset `downloads/.douyin-profile` only when you intentionally want a clean browser state. For remote-CDP mode, re-login in the dedicated Chrome profile instead of copying auth headers manually.
 
 ## Ollama keyword expansion
 
