@@ -26,7 +26,7 @@ func Expand(keyword string) []string {
 		{[]string{"meal prep", "bảo quản", "bao quan", "đông lạnh", "dong lanh"}, []string{"备餐", "冻门", "保鲜神器", "保鲜盒", "真空袋"}},
 		{[]string{"cà phê", "ca phe", "coffee"}, []string{"户外咖啡", "便携咖啡", "手冲咖啡", "咖啡好物"}},
 		{[]string{"camping", "cắm trại", "cam trai", "outdoor"}, []string{"露营好物", "户外好物", "户外装备", "便携好物"}},
-		{[]string{"pet", "thú cưng", "thu cung", "mèo", "meo", "chó", "cho"}, []string{"宠物好物", "养猫好物", "养狗好物", "宠物用品"}},
+		{[]string{"pet", "thú cưng", "thu cung", "mèo", "meo", "chó", "cho"}, []string{"猫咪迷惑行为", "狗狗迷惑行为", "宠物搞笑", "宠物配音", "猫咪日常", "狗狗日常", "宠物好物", "养猫好物", "养狗好物", "宠物用品"}},
 		{[]string{"skincare", "chăm sóc cá nhân", "cham soc ca nhan", "personal care", "mỹ phẩm", "my pham", "makeup"}, []string{"美妆好物", "平价好物", "新品试用", "好物测评"}},
 		{[]string{"công nghệ", "cong nghe", "technology", "tech", "đồ công nghệ", "do cong nghe", "gadget", "điện tử", "dien tu", "số hóa", "so hoa"}, []string{"科技好物", "数码好物", "实用数码产品", "黑科技好物", "数码新品开箱"}},
 		{[]string{"ai agent", "agent ai"}, []string{"AI智能体", "智能体", "人工智能Agent"}},
