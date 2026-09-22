@@ -19,15 +19,15 @@ DOUYIN_NATIVE_SEARCH_PROFILE_DIR=/app/downloads/.douyin-profile
 
 The standard Docker configuration stores this profile inside the existing `./downloads:/app/downloads` bind mount, so cookies and browser-generated short-lived tokens can survive container restarts and can be refreshed by Douyin inside the browser context.
 
-For the initial session, `DOUYIN_COOKIE` is still supported:
+`DOUYIN_COOKIE` remains only as an optional compatibility/bootstrap input for older flows or when a fresh session can be seeded this way:
 
 ```env
 DOUYIN_COOKIE=ttwid=...; sessionid=...; ...
 ```
 
-Those values are injected into the browser before navigation. After successful searches, Douyin can update the persistent profile itself. Do not commit real cookies or browser profile data to Git.
+Those values, when supplied, are injected into the browser before navigation; they are **not** treated as proof that subsequent Douyin API requests will send a Cookie header. After navigation, Douyin can update the persistent browser profile itself. Do not commit real cookies or browser profile data to Git.
 
-Cookie **values are never printed** by the native-search helper. Diagnostics only expose cookie names/counts, whether the profile is persistent, and captured search endpoint URLs.
+Secret values are never printed by the native-search helper. Diagnostics expose only names/counts: browser cookie names, localStorage/sessionStorage key names, request header names, whether the profile is persistent, and captured search endpoint URLs.
 
 ## Search fallback order
 
@@ -62,14 +62,16 @@ The browser is used for request signing/session execution only. Search response 
 If search renders but returns no videos, the error now reports:
 
 - browser cookie count;
+- localStorage/sessionStorage key counts;
+- search-request header-name count;
 - number of captured search responses;
 - whether a persistent profile was used.
 
 Useful interpretations:
 
-- `cookies=0`: seed a fresh authenticated browser session;
-- cookies present but `captured_search_responses=0`: Douyin likely changed the request surface again; DOM/video-link fallback will still be attempted;
-- status `2483`: the current browser session is no longer authenticated.
+- `browser_cookies=0` by itself is **not** an authentication verdict; inspect the full browser-state diagnostics;
+- storage keys/header names present but `captured_search_responses=0`: Douyin likely changed the request surface again; DOM/video-link fallback will still be attempted;
+- status `2483`: Douyin explicitly rejected the current browser session for that search request.
 
 When you rotate a leaked or expired Douyin session, stop VideoGet, remove `downloads/.douyin-profile`, provide a fresh local `DOUYIN_COOKIE`, and start the container again.
 
