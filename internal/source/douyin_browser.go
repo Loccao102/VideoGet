@@ -93,9 +93,9 @@ func (p *DouyinProvider) searchNativeBrowser(ctx context.Context, keyword string
 		if len(results) > 0 {
 			return results, nil
 		}
-		if apiErr != nil {
-			return nil, apiErr
-		}
+		// Endpoint/status handling changes frequently. Even when one captured API
+		// response reports an error, prefer rendered links/DOM if the page itself
+		// successfully exposed video results.
 		if len(payload.VideoLinks) > 0 {
 			results = parseDouyinVideoLinks(payload.VideoLinks, keyword, limit)
 			if len(results) > 0 {
@@ -107,6 +107,9 @@ func (p *DouyinProvider) searchNativeBrowser(ctx context.Context, keyword string
 			if len(results) > 0 {
 				return results, nil
 			}
+		}
+		if apiErr != nil {
+			return nil, apiErr
 		}
 		if payload.CookieCount == 0 {
 			return nil, fmt.Errorf("native Douyin search has no browser cookies; provide DOUYIN_COOKIE once or use a persistent DOUYIN_NATIVE_SEARCH_PROFILE_DIR")
