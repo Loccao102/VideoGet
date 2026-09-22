@@ -30,9 +30,6 @@ type PublicShortProvider struct{ config publicShortConfig }
 
 func NewPublicShortProviders() []Provider {
 	configs := []publicShortConfig{
-		{"kuaishou", "site:kuaishou.com/short-video", []string{"kuaishou.com"}, func(u *url.URL) bool {
-			return strings.Contains(strings.ToLower(u.Path), "/short-video/")
-		}},
 		{"xiaohongshu", "site:xiaohongshu.com/explore", []string{"xiaohongshu.com"}, func(u *url.URL) bool {
 			p := strings.ToLower(u.Path)
 			return strings.Contains(p, "/explore/") || strings.Contains(p, "/discovery/item/")
