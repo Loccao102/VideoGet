@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import tempfile
 import time
 from pathlib import Path
@@ -14,6 +15,24 @@ from faster_whisper import WhisperModel
 import localize as base
 import localize_fast as fast  # installs faster translation overrides on base
 import render_subtitles
+
+
+
+def input_has_audio_stream(input_path: Path) -> bool:
+    """Probe only stream metadata; do not mistake a corrupt video for silence."""
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "error",
+            "-select_streams", "a",
+            "-show_entries", "stream=index",
+            "-of", "csv=p=0",
+            str(input_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return bool(result.stdout.strip())
 
 
 def env_bool(name: str, default: bool) -> bool:
@@ -97,20 +116,29 @@ def main() -> None:
         workdir = Path(temp)
         audio_path = workdir / "source.wav"
         base.log("Đang tách audio cho subtitle-only...")
-        base.run([
-            "ffmpeg",
-            "-y",
-            "-i",
-            str(input_path),
-            "-vn",
-            "-ac",
-            "1",
-            "-ar",
-            "16000",
-            "-c:a",
-            "pcm_s16le",
-            str(audio_path),
-        ])
+        try:
+            base.run([
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(input_path),
+                "-vn",
+                "-ac",
+                "1",
+                "-ar",
+                "16000",
+                "-c:a",
+                "pcm_s16le",
+                str(audio_path),
+            ])
+        except Exception:
+            # Valid videos can have no audio track at all. Only treat a
+            # confirmed absent audio stream as no_speech; preserve real
+            # FFmpeg errors for corrupt files or failed decoding.
+            if not input_has_audio_stream(input_path):
+                emit_no_speech_result(input_path, metadata_path, timings, started)
+                return
+            raise
 
         transcribe_started = time.perf_counter()
         model_name = os.getenv("WHISPER_MODEL", "small")
