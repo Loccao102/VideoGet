@@ -4,6 +4,8 @@ import contextlib
 import importlib.util
 import io
 import os
+import shutil
+import subprocess
 import json
 import sys
 import tempfile
@@ -36,6 +38,37 @@ class SubtitleNoSpeechTests(unittest.TestCase):
         self.assertEqual(module.collect_segments(items), [
             {"id": 1, "start": 1.0, "end": 2.0, "text": "hello"}
         ])
+
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg tools not installed")
+    def test_real_video_only_mp4_probe_and_main_skip_without_loading_whisper(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "actual-video-only.mp4"
+            output = Path(folder) / "out"
+            subprocess.run([
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "lavfi", "-i", "color=c=black:s=32x32:d=0.3",
+                "-an", "-c:v", "mpeg4", str(source)
+            ], check=True, capture_output=True, text=True)
+            self.assertFalse(module.input_has_audio_stream(source))
+            stdout = io.StringIO()
+            def real_ffmpeg(args):
+                subprocess.run(args, check=True, capture_output=True, text=True)
+            with (
+                mock.patch.object(module.base, "run", real_ffmpeg, create=True),
+                mock.patch.object(module.base, "log"),
+                mock.patch.object(module, "WhisperModel") as whisper,
+                mock.patch.object(sys, "argv", [
+                    "localize_subtitles.py", "--input", str(source),
+                    "--output-dir", str(output)
+                ]),
+                contextlib.redirect_stdout(stdout),
+            ):
+                module.main()
+            result = json.loads(stdout.getvalue().strip())
+            self.assertEqual(result["skippedReason"], "no_speech")
+            self.assertEqual(result["outputVideo"], str(source))
+            self.assertTrue((output / "actual-video-only.subtitle.json").exists())
+            whisper.assert_not_called()
 
     def test_video_with_no_audio_stream_skips_whisper_and_returns_original(self):
         with tempfile.TemporaryDirectory() as folder:
