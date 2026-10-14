@@ -56,9 +56,9 @@ class SubtitleNoSpeechTests(unittest.TestCase):
             buffer = io.StringIO()
             with (
                 mock.patch.object(module, "WhisperModel", return_value=fake),
-                mock.patch.object(module.base, "run"),
+                mock.patch.object(module.base, "run", create=True),
                 mock.patch.object(module.base, "log"),
-                mock.patch.object(module.render_subtitles, "render") as render,
+                mock.patch.object(module.render_subtitles, "render", create=True) as render,
                 mock.patch.object(sys, "argv", [
                     "localize_subtitles.py", "--input", str(input_path),
                     "--output-dir", str(output)
@@ -108,7 +108,7 @@ class SubtitleNoSpeechTests(unittest.TestCase):
             stdout = io.StringIO()
             with (
                 mock.patch.object(module, "WhisperModel", return_value=model),
-                mock.patch.object(module.base, "run"),
+                mock.patch.object(module.base, "run", create=True),
                 mock.patch.object(module.base, "write_srt", write_srt, create=True),
                 mock.patch.object(module.base, "translate_segments", lambda *_: None, create=True),
                 mock.patch.object(module.base, "log"),
