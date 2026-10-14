@@ -37,6 +37,59 @@ class SubtitleNoSpeechTests(unittest.TestCase):
             {"id": 1, "start": 1.0, "end": 2.0, "text": "hello"}
         ])
 
+    def test_video_with_no_audio_stream_skips_whisper_and_returns_original(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "video-only.mp4"
+            source.write_bytes(b"fixture")
+            output = Path(folder) / "out"
+            captured = io.StringIO()
+            with (
+                mock.patch.object(module.base, "run", side_effect=RuntimeError("no audio output"), create=True),
+                mock.patch.object(module, "input_has_audio_stream", return_value=False) as probe,
+                mock.patch.object(module, "WhisperModel") as model,
+                mock.patch.object(module.base, "log"),
+                mock.patch.object(sys, "argv", [
+                    "localize_subtitles.py", "--input", str(source),
+                    "--output-dir", str(output)
+                ]),
+                contextlib.redirect_stdout(captured),
+            ):
+                module.main()
+            result = json.loads(captured.getvalue().strip())
+            self.assertEqual(result["outputVideo"], str(source))
+            self.assertEqual(result["skippedReason"], "no_speech")
+            model.assert_not_called()
+            probe.assert_called_once_with(source)
+            self.assertEqual(json.loads((output / "video-only.subtitle.json").read_text())["segments"], [])
+
+    def test_ffmpeg_error_with_audio_stream_still_fails_closed(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "bad.mp4"
+            source.write_bytes(b"fixture")
+            output = Path(folder) / "out"
+            with (
+                mock.patch.object(module.base, "run", side_effect=RuntimeError("decode failed"), create=True),
+                mock.patch.object(module, "input_has_audio_stream", return_value=True),
+                mock.patch.object(module.base, "log"),
+                mock.patch.object(sys, "argv", [
+                    "localize_subtitles.py", "--input", str(source),
+                    "--output-dir", str(output)
+                ]),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "decode failed"):
+                    module.main()
+            self.assertFalse((output / "bad.subtitle.json").exists())
+
+    def test_ffprobe_looks_only_for_audio_streams(self):
+        with mock.patch.object(module.subprocess, "run",
+                               return_value=types.SimpleNamespace(stdout="")) as probe:
+            self.assertFalse(module.input_has_audio_stream(Path("/tmp/silent.mp4")))
+            self.assertTrue(probe.call_args.kwargs["check"])
+            self.assertIn("-select_streams", probe.call_args.args[0])
+        with mock.patch.object(module.subprocess, "run",
+                               return_value=types.SimpleNamespace(stdout="1\\n")):
+            self.assertTrue(module.input_has_audio_stream(Path("/tmp/with-audio.mp4")))
+
     def test_main_retries_silence_before_returning_original_video(self):
         class FakeModel:
             calls = []
