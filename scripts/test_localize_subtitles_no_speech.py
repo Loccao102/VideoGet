@@ -79,6 +79,7 @@ class SubtitleNoSpeechTests(unittest.TestCase):
             with (
                 mock.patch.object(module.base, "run", side_effect=RuntimeError("no audio output"), create=True),
                 mock.patch.object(module, "input_has_audio_stream", return_value=False) as probe,
+                mock.patch.object(module, "input_has_video_stream", return_value=True) as video_probe,
                 mock.patch.object(module, "WhisperModel") as model,
                 mock.patch.object(module.base, "log"),
                 mock.patch.object(sys, "argv", [
@@ -93,7 +94,31 @@ class SubtitleNoSpeechTests(unittest.TestCase):
             self.assertEqual(result["skippedReason"], "no_speech")
             model.assert_not_called()
             probe.assert_called_once_with(source)
+            video_probe.assert_called_once_with(source)
             self.assertEqual(json.loads((output / "video-only.subtitle.json").read_text())["segments"], [])
+
+    def test_audio_extraction_failure_without_audio_or_video_does_not_claim_silence(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "not-a-video.mp4"
+            source.write_bytes(b"corrupt fixture")
+            output = Path(folder) / "out"
+            with (
+                mock.patch.object(module.base, "run", side_effect=RuntimeError("invalid input"), create=True),
+                mock.patch.object(module, "input_has_audio_stream", return_value=False),
+                mock.patch.object(module, "input_has_video_stream", return_value=False),
+                mock.patch.object(module.base, "log"),
+                mock.patch.object(sys, "argv", [
+                    "localize_subtitles.py", "--input", str(source),
+                    "--output-dir", str(output)
+                ]),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "invalid input"):
+                    module.main()
+            self.assertFalse((output / "not-a-video.subtitle.json").exists())
+
+    def test_stream_probe_rejects_unexpected_stream_kinds(self):
+        with self.assertRaisesRegex(ValueError, "audio or video"):
+            module.input_has_stream(Path("fixture.mp4"), "s")
 
     def test_ffmpeg_error_with_audio_stream_still_fails_closed(self):
         with tempfile.TemporaryDirectory() as folder:
