@@ -80,6 +80,7 @@ class SubtitleNoSpeechTests(unittest.TestCase):
                 mock.patch.object(module.base, "run", side_effect=RuntimeError("no audio output"), create=True),
                 mock.patch.object(module, "input_has_audio_stream", return_value=False) as probe,
                 mock.patch.object(module, "input_has_video_stream", return_value=True) as video_probe,
+                mock.patch.object(module, "input_has_decodable_video_frame", return_value=True) as decode_probe,
                 mock.patch.object(module, "WhisperModel") as model,
                 mock.patch.object(module.base, "log"),
                 mock.patch.object(sys, "argv", [
@@ -95,6 +96,7 @@ class SubtitleNoSpeechTests(unittest.TestCase):
             model.assert_not_called()
             probe.assert_called_once_with(source)
             video_probe.assert_called_once_with(source)
+            decode_probe.assert_called_once_with(source)
             self.assertEqual(json.loads((output / "video-only.subtitle.json").read_text())["segments"], [])
 
     def test_audio_extraction_failure_without_audio_or_video_does_not_claim_silence(self):
@@ -119,6 +121,37 @@ class SubtitleNoSpeechTests(unittest.TestCase):
     def test_stream_probe_rejects_unexpected_stream_kinds(self):
         with self.assertRaisesRegex(ValueError, "audio or video"):
             module.input_has_stream(Path("fixture.mp4"), "s")
+
+    def test_corrupt_video_metadata_with_no_decodable_frames_preserves_ffmpeg_error(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "corrupt-video.mp4"
+            source.write_bytes(b"not real frames")
+            output = Path(folder) / "out"
+            with (
+                mock.patch.object(module.base, "run", side_effect=RuntimeError("decode failed"), create=True),
+                mock.patch.object(module, "input_has_audio_stream", return_value=False),
+                mock.patch.object(module, "input_has_video_stream", return_value=True),
+                mock.patch.object(module, "input_has_decodable_video_frame", return_value=False) as decode_probe,
+                mock.patch.object(module.base, "log"),
+                mock.patch.object(sys, "argv", [
+                    "localize_subtitles.py", "--input", str(source),
+                    "--output-dir", str(output)
+                ]),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "decode failed"):
+                    module.main()
+            decode_probe.assert_called_once_with(source)
+            self.assertFalse((output / "corrupt-video.subtitle.json").exists())
+
+    def test_video_frame_probe_needs_actual_decoded_bytes(self):
+        with mock.patch.object(
+            module.subprocess, "run", return_value=types.SimpleNamespace(stdout=b"")
+        ):
+            self.assertFalse(module.input_has_decodable_video_frame(Path("metadata-only.mp4")))
+        with mock.patch.object(
+            module.subprocess, "run", return_value=types.SimpleNamespace(stdout=b"jpeg-frame")
+        ):
+            self.assertTrue(module.input_has_decodable_video_frame(Path("real.mp4")))
 
     def test_ffmpeg_error_with_audio_stream_still_fails_closed(self):
         with tempfile.TemporaryDirectory() as folder:
