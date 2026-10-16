@@ -123,6 +123,45 @@ class SubtitleNoSpeechTests(unittest.TestCase):
                                return_value=types.SimpleNamespace(stdout="1\\n")):
             self.assertTrue(module.input_has_audio_stream(Path("/tmp/with-audio.mp4")))
 
+    def test_no_speech_removes_artifacts_from_previous_runs_without_deleting_input(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source = root / "clip.mp4"
+            source.write_bytes(b"original footage")
+            output = root / "renders"
+            output.mkdir()
+            metadata = output / "clip.subtitle.json"
+            old_original = output / "clip.original.srt"
+            old_translated = output / "clip.vi.srt"
+            old_rendered = output / "clip.vi-subbed.mp4"
+            for artifact in (old_original, old_translated, old_rendered):
+                artifact.write_text("outdated subtitles", encoding="utf-8")
+
+            output_capture = io.StringIO()
+            with mock.patch.object(module.base, "log"), contextlib.redirect_stdout(output_capture):
+                module.emit_no_speech_result(
+                    source, metadata, {}, 0.0,
+                    derived_artifacts=(old_original, old_translated, old_rendered)
+                )
+            result = json.loads(output_capture.getvalue().strip())
+            self.assertEqual(result["outputVideo"], str(source))
+            self.assertEqual(result["skippedReason"], "no_speech")
+            self.assertEqual(source.read_bytes(), b"original footage")
+            self.assertTrue(metadata.is_file())
+            for artifact in (old_original, old_translated, old_rendered):
+                self.assertFalse(artifact.exists(), f"stale output should be deleted: {artifact}")
+
+    def test_no_speech_cleanup_never_unlinks_original_input(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "clip.mp4"
+            source.write_bytes(b"original footage")
+            with self.assertRaisesRegex(ValueError, "original input video"):
+                module.emit_no_speech_result(
+                    source, Path(folder) / "clip.subtitle.json",
+                    {}, 0.0, derived_artifacts=(source,)
+                )
+            self.assertEqual(source.read_bytes(), b"original footage")
+
     def test_main_retries_silence_before_returning_original_video(self):
         class FakeModel:
             calls = []
