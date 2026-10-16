@@ -36,7 +36,7 @@ class SubtitleNoSpeechTests(unittest.TestCase):
             types.SimpleNamespace(start=1.0, end=2.0, text=" hello "),
         ]
         self.assertEqual(module.collect_segments(items), [
-            {"id": 1, "start": 1.0, "end": 2.0, "text": "hello"}
+            {"id": 0, "start": 1.0, "end": 2.0, "text": "hello"}
         ])
 
     @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg tools not installed")
@@ -216,6 +216,21 @@ class SubtitleNoSpeechTests(unittest.TestCase):
                 ("quiet.original.srt", 1, "text"),
                 ("quiet.vi.srt", 1, "vi")
             ])
+
+    def test_collect_segments_reindexes_nonempty_subtitles_without_gaps(self):
+        raw = [
+            types.SimpleNamespace(start=0, end=1, text="hello"),
+            types.SimpleNamespace(start=1, end=2, text="   "),
+            types.SimpleNamespace(start=2, end=3, text="world"),
+        ]
+        self.assertEqual([s["id"] for s in module.collect_segments(raw)], [0, 1])
+
+    def test_collect_segments_rejects_invalid_timestamps_instead_of_claiming_silence(self):
+        for start, end in ((2, 1), (0, 0), (float("nan"), 1), (0, float("inf")), (-1, 2)):
+            with self.subTest(start=start, end=end):
+                raw = [types.SimpleNamespace(start=start, end=end, text="hello")]
+                with self.assertRaisesRegex(ValueError, "invalid subtitle timestamps"):
+                    module.collect_segments(raw)
 
     def test_no_speech_returns_original_media_and_explicit_skip_reason(self):
         with tempfile.TemporaryDirectory() as folder:
