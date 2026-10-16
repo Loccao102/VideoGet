@@ -69,7 +69,14 @@ def emit_no_speech_result(
     timings: dict[str, float],
     started: float,
     detected_language: str = "",
+    derived_artifacts: tuple[Path, ...] = (),
 ) -> None:
+    # Previous attempts may have left subtitles or rendered media using the
+    # same input stem. Never expose obsolete outputs for a no-speech result.
+    for artifact in derived_artifacts:
+        if artifact.resolve() == input_path.resolve():
+            raise ValueError("Refusing to remove the original input video")
+        artifact.unlink(missing_ok=True)
     timings.setdefault("translate", 0.0)
     timings.setdefault("render", 0.0)
     timings["tts"] = 0.0
@@ -142,7 +149,10 @@ def main() -> None:
             # confirmed absent audio stream as no_speech; preserve real
             # FFmpeg errors for corrupt files or failed decoding.
             if not input_has_audio_stream(input_path):
-                emit_no_speech_result(input_path, metadata_path, timings, started)
+                emit_no_speech_result(
+                    input_path, metadata_path, timings, started,
+                    derived_artifacts=(original_srt, vi_srt, output_video),
+                )
                 return
             raise
 
@@ -200,6 +210,7 @@ def main() -> None:
                 timings,
                 started,
                 detected_language,
+                derived_artifacts=(original_srt, vi_srt, output_video),
             )
             return
 
