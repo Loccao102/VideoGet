@@ -46,6 +46,28 @@ def input_has_video_stream(input_path: Path) -> bool:
     return input_has_stream(input_path, "v")
 
 
+def input_has_decodable_video_frame(input_path: Path) -> bool:
+    """Require one actually decodable frame, not merely a video stream header.
+
+    This runs only when audio extraction failed. A single frame avoids
+    decoding the whole source and prevents a broken MP4 with valid metadata
+    from masquerading as a successful no-speech video.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-i",
+                str(input_path), "-map", "0:v:0", "-frames:v", "1",
+                "-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1",
+            ],
+            capture_output=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        return False
+    return bool(result.stdout)
+
+
 def env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
     if raw is None or not raw.strip():
@@ -158,7 +180,11 @@ def main() -> None:
             # Valid videos can have no audio track at all. Only treat a
             # confirmed absent audio stream as no_speech; preserve real
             # FFmpeg errors for corrupt files or failed decoding.
-            if not input_has_audio_stream(input_path) and input_has_video_stream(input_path):
+            if (
+                not input_has_audio_stream(input_path)
+                and input_has_video_stream(input_path)
+                and input_has_decodable_video_frame(input_path)
+            ):
                 emit_no_speech_result(
                     input_path, metadata_path, timings, started,
                     derived_artifacts=(original_srt, vi_srt, output_video),
