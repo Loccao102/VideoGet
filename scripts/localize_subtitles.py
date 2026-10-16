@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import subprocess
 import tempfile
@@ -44,14 +45,19 @@ def env_bool(name: str, default: bool) -> bool:
 
 def collect_segments(raw_segments) -> list[dict]:
     segments: list[dict] = []
-    for index, segment in enumerate(raw_segments):
+    for segment in raw_segments:
         text = segment.text.strip()
         if not text:
             continue
+        start, end = float(segment.start), float(segment.end)
+        # Speech with bad timestamps must not be mistaken for silent audio.
+        # That would silently return an unsubtitled original video.
+        if not (math.isfinite(start) and math.isfinite(end) and 0 <= start < end):
+            raise ValueError(f"Whisper returned invalid subtitle timestamps: {start}, {end}")
         segments.append({
-            "id": index,
-            "start": float(segment.start),
-            "end": float(segment.end),
+            "id": len(segments),
+            "start": start,
+            "end": end,
             "text": text,
         })
     return segments
