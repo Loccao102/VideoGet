@@ -19,12 +19,14 @@ import render_subtitles
 
 
 
-def input_has_audio_stream(input_path: Path) -> bool:
-    """Probe only stream metadata; do not mistake a corrupt video for silence."""
+def input_has_stream(input_path: Path, stream_kind: str) -> bool:
+    """Probe media metadata; a video must actually contain video to be reusable."""
+    if stream_kind not in ("a", "v"):
+        raise ValueError("ffprobe stream kind must be audio or video")
     result = subprocess.run(
         [
             "ffprobe", "-v", "error",
-            "-select_streams", "a",
+            "-select_streams", stream_kind,
             "-show_entries", "stream=index",
             "-of", "csv=p=0",
             str(input_path),
@@ -34,6 +36,14 @@ def input_has_audio_stream(input_path: Path) -> bool:
         check=True,
     )
     return bool(result.stdout.strip())
+
+
+def input_has_audio_stream(input_path: Path) -> bool:
+    return input_has_stream(input_path, "a")
+
+
+def input_has_video_stream(input_path: Path) -> bool:
+    return input_has_stream(input_path, "v")
 
 
 def env_bool(name: str, default: bool) -> bool:
@@ -148,7 +158,7 @@ def main() -> None:
             # Valid videos can have no audio track at all. Only treat a
             # confirmed absent audio stream as no_speech; preserve real
             # FFmpeg errors for corrupt files or failed decoding.
-            if not input_has_audio_stream(input_path):
+            if not input_has_audio_stream(input_path) and input_has_video_stream(input_path):
                 emit_no_speech_result(
                     input_path, metadata_path, timings, started,
                     derived_artifacts=(original_srt, vi_srt, output_video),
