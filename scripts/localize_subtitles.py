@@ -95,6 +95,20 @@ def collect_segments(raw_segments) -> list[dict]:
     return segments
 
 
+def clear_derived_artifacts(input_path: Path, artifacts: tuple[Path, ...]) -> None:
+    """Discard outputs from previous attempts, but never remove source media.
+
+    Check *all* paths before deleting anything so a user-provided output
+    directory cannot cause partial cleanup of unrelated source media.
+    """
+    original = input_path.resolve()
+    for artifact in artifacts:
+        if artifact.resolve() == original:
+            raise ValueError("Refusing to remove the original input video")
+    for artifact in artifacts:
+        artifact.unlink(missing_ok=True)
+
+
 def emit_no_speech_result(
     input_path: Path,
     metadata_path: Path,
@@ -103,12 +117,8 @@ def emit_no_speech_result(
     detected_language: str = "",
     derived_artifacts: tuple[Path, ...] = (),
 ) -> None:
-    # Previous attempts may have left subtitles or rendered media using the
-    # same input stem. Never expose obsolete outputs for a no-speech result.
-    for artifact in derived_artifacts:
-        if artifact.resolve() == input_path.resolve():
-            raise ValueError("Refusing to remove the original input video")
-        artifact.unlink(missing_ok=True)
+    # A no-speech result never exposes subtitles/media from an older run.
+    clear_derived_artifacts(input_path, derived_artifacts)
     timings.setdefault("translate", 0.0)
     timings.setdefault("render", 0.0)
     timings["tts"] = 0.0
@@ -154,10 +164,12 @@ def main() -> None:
     vi_srt = output_dir / f"{stem}.vi.srt"
     output_video = output_dir / f"{stem}.vi-subbed.mp4"
     metadata_path = output_dir / f"{stem}.subtitle.json"
-    # A previous successful run may have left a valid-looking result. If the
-    # current attempt fails during FFmpeg/Whisper/render, that old metadata
-    # must not be mistaken for the outcome of this attempt.
-    metadata_path.unlink(missing_ok=True)
+    # Fail closed on reruns: old subtitle files or video are as misleading
+    # as old metadata when a later FFmpeg/Whisper/render step fails.
+    # The original input is checked and left untouched.
+    clear_derived_artifacts(
+        input_path, (metadata_path, original_srt, vi_srt, output_video)
+    )
     timings: dict[str, float] = {}
     started = time.perf_counter()
 
