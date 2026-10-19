@@ -126,6 +126,13 @@ class SubtitleNoSpeechTests(unittest.TestCase):
             output.mkdir()
             metadata = output / "clip.subtitle.json"
             metadata.write_text('{"outputVideo":"outdated.mp4"}', encoding="utf-8")
+            stale_artifacts = [
+                output / "clip.original.srt",
+                output / "clip.vi.srt",
+                output / "clip.vi-subbed.mp4",
+            ]
+            for artifact in stale_artifacts:
+                artifact.write_bytes(b"stale previous output")
 
             with (
                 mock.patch.object(module.base, "run", side_effect=RuntimeError("audio decode failed"), create=True),
@@ -139,7 +146,20 @@ class SubtitleNoSpeechTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "audio decode failed"):
                     module.main()
             self.assertFalse(metadata.exists(), "old success metadata must not survive a failed retry")
+            for artifact in stale_artifacts:
+                self.assertFalse(artifact.exists(), f"stale artifact survived failed rerun: {artifact}")
             self.assertEqual(source.read_bytes(), b"input fixture")
+
+    def test_cleanup_preflights_all_paths_before_deleting_anything(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "source.mp4"
+            source.write_bytes(b"original input")
+            stale = Path(folder) / "old.srt"
+            stale.write_text("previous run")
+            with self.assertRaisesRegex(ValueError, "original input video"):
+                module.clear_derived_artifacts(source, (stale, source))
+            self.assertEqual(source.read_bytes(), b"original input")
+            self.assertTrue(stale.exists(), "failed preflight must not partially remove outputs")
 
     def test_stream_probe_rejects_unexpected_stream_kinds(self):
         with self.assertRaisesRegex(ValueError, "audio or video"):
