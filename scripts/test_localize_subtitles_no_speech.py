@@ -118,6 +118,29 @@ class SubtitleNoSpeechTests(unittest.TestCase):
                     module.main()
             self.assertFalse((output / "not-a-video.subtitle.json").exists())
 
+    def test_failed_retry_does_not_expose_stale_subtitle_metadata(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "clip.mp4"
+            source.write_bytes(b"input fixture")
+            output = Path(folder) / "out"
+            output.mkdir()
+            metadata = output / "clip.subtitle.json"
+            metadata.write_text('{"outputVideo":"outdated.mp4"}', encoding="utf-8")
+
+            with (
+                mock.patch.object(module.base, "run", side_effect=RuntimeError("audio decode failed"), create=True),
+                mock.patch.object(module, "input_has_audio_stream", return_value=True),
+                mock.patch.object(module.base, "log"),
+                mock.patch.object(sys, "argv", [
+                    "localize_subtitles.py", "--input", str(source),
+                    "--output-dir", str(output)
+                ]),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "audio decode failed"):
+                    module.main()
+            self.assertFalse(metadata.exists(), "old success metadata must not survive a failed retry")
+            self.assertEqual(source.read_bytes(), b"input fixture")
+
     def test_stream_probe_rejects_unexpected_stream_kinds(self):
         with self.assertRaisesRegex(ValueError, "audio or video"):
             module.input_has_stream(Path("fixture.mp4"), "s")
