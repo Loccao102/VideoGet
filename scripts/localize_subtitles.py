@@ -275,6 +275,10 @@ def main() -> None:
 
         render_started = time.perf_counter()
         render_subtitles.render(input_path, vi_srt, output_video)
+        # A renderer may return without raising while leaving no playable
+        # output (or an empty placeholder). Never print success metadata for it.
+        if not output_video.is_file() or output_video.stat().st_size == 0:
+            raise RuntimeError("Subtitle rendering did not produce a nonempty output video")
         timings["render"] = round(time.perf_counter() - render_started, 3)
 
     timings["total"] = round(time.perf_counter() - started, 3)
