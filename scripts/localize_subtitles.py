@@ -154,6 +154,10 @@ def main() -> None:
     vi_srt = output_dir / f"{stem}.vi.srt"
     output_video = output_dir / f"{stem}.vi-subbed.mp4"
     metadata_path = output_dir / f"{stem}.subtitle.json"
+    # A previous successful run may have left a valid-looking result. If the
+    # current attempt fails during FFmpeg/Whisper/render, that old metadata
+    # must not be mistaken for the outcome of this attempt.
+    metadata_path.unlink(missing_ok=True)
     timings: dict[str, float] = {}
     started = time.perf_counter()
 
