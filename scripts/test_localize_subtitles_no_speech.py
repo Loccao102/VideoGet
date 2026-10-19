@@ -357,6 +357,39 @@ class SubtitleNoSpeechTests(unittest.TestCase):
                 ("quiet.vi.srt", 1, "vi")
             ])
 
+    def test_render_must_produce_nonempty_video_before_returning_success(self):
+        class SpeechModel:
+            def transcribe(self, _audio, **_kwargs):
+                return iter([types.SimpleNamespace(
+                    start=0.1, end=0.8, text="hello"
+                )]), types.SimpleNamespace(language="en")
+
+        for render_kind in ("missing", "empty"):
+            with self.subTest(render_kind=render_kind), tempfile.TemporaryDirectory() as folder:
+                source = Path(folder) / "video.mp4"
+                source.write_bytes(b"original footage")
+                output = Path(folder) / "out"
+                def faulty_render(_source, _srt, destination):
+                    if render_kind == "empty":
+                        Path(destination).write_bytes(b"")
+
+                with (
+                    mock.patch.object(module, "WhisperModel", return_value=SpeechModel()),
+                    mock.patch.object(module.base, "run", create=True),
+                    mock.patch.object(module.base, "log"),
+                    mock.patch.object(module.base, "write_srt", create=True),
+                    mock.patch.object(module.base, "translate_segments", create=True),
+                    mock.patch.object(module.render_subtitles, "render", faulty_render, create=True),
+                    mock.patch.object(sys, "argv", [
+                        "localize_subtitles.py", "--input", str(source),
+                        "--output-dir", str(output)
+                    ]),
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "nonempty output video"):
+                        module.main()
+                self.assertEqual(source.read_bytes(), b"original footage")
+                self.assertFalse((output / "video.subtitle.json").exists())
+
     def test_collect_segments_reindexes_nonempty_subtitles_without_gaps(self):
         raw = [
             types.SimpleNamespace(start=0, end=1, text="hello"),
