@@ -336,10 +336,17 @@ def process_job(model: WhisperModel, input_value: str, output_value: str) -> dic
     output_dir.mkdir(parents=True, exist_ok=True)
     if not input_path.exists():
         raise FileNotFoundError(input_path)
-    if not base.has_audio_stream(input_path):
-        raise RuntimeError("input video has no audio stream")
 
     stem = input_path.stem
+    # A failed transcription/translation must never leave an older successful
+    # localization result with the same stem in place. Preserve stage caches
+    # and the original media; clear only the previous final deliverables.
+    remove_partial_outputs(input_path, (
+        output_dir / f"{stem}.localization.json",
+        output_dir / f"{stem}.vi-dubbed.mp4",
+    ))
+    if not base.has_audio_stream(input_path):
+        raise RuntimeError("input video has no audio stream")
     transcript_sig = source_signature(input_path)
 
     stage = time.perf_counter()
