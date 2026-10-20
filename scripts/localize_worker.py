@@ -170,10 +170,15 @@ def decode_segments(
         text = segment.text.strip()
         if not text:
             continue
+        start, end = float(segment.start), float(segment.end)
+        # Bad Whisper timestamps are corrupted speech data, not silence.
+        # Never pass NaN, negative or reversed segments into TTS/rendering.
+        if not (math.isfinite(start) and math.isfinite(end) and 0 <= start < end):
+            raise ValueError(f"Whisper returned invalid segment timestamps: {start}, {end}")
         segments.append({
             "id": len(segments),
-            "start": float(segment.start),
-            "end": float(segment.end),
+            "start": start,
+            "end": end,
             "text": text,
         })
     return segments, info
