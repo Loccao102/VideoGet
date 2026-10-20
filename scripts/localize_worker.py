@@ -15,6 +15,7 @@ import math
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -287,6 +288,39 @@ def synthesize(segments: list[dict], output_dir: Path, stem: str, input_path: Pa
     return voice_track, signature, False
 
 
+def remove_partial_outputs(input_path: Path, artifacts: tuple[Path, ...]) -> None:
+    """Remove only worker-generated files, never the input media.
+
+    Preflight every destination first; an output symlink may otherwise point
+    back at the source video and turn an ordinary retry into data loss.
+    """
+    source = input_path.resolve()
+    for artifact in artifacts:
+        if artifact.resolve() == source:
+            raise ValueError("Refusing to delete original input video")
+    for artifact in artifacts:
+        artifact.unlink(missing_ok=True)
+
+
+def rendered_video_is_usable(output_video: Path) -> bool:
+    """Check a rendered output exists and has at least one decodable frame."""
+    if not output_video.is_file() or output_video.stat().st_size == 0:
+        return False
+    try:
+        result = subprocess.run(
+            [
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-i",
+                str(output_video), "-map", "0:v:0", "-frames:v", "1",
+                "-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1",
+            ],
+            capture_output=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        return False
+    return bool(result.stdout)
+
+
 def process_job(model: WhisperModel, input_value: str, output_value: str) -> dict:
     started_total = time.perf_counter()
     timings: dict[str, float] = {}
@@ -309,6 +343,15 @@ def process_job(model: WhisperModel, input_value: str, output_value: str) -> dic
     if hit:
         cache_hits.append("transcript")
     if not segments:
+        # A previous successful dub using this output stem must not leak into
+        # a later silent upload. Stage caches stay available for safe retries.
+        remove_partial_outputs(input_path, (
+            original_srt,
+            output_dir / f"{stem}.vi.srt",
+            output_dir / f"{stem}.vi-voice.wav",
+            output_dir / f"{stem}.vi-dubbed.mp4",
+            output_dir / f"{stem}.localization.json",
+        ))
         return {
             "outputVideo": str(input_path),
             "detectedLanguage": detected_language,
@@ -336,12 +379,20 @@ def process_job(model: WhisperModel, input_value: str, output_value: str) -> dic
         cache_hits.append("tts")
 
     output_video = output_dir / f"{stem}.vi-dubbed.mp4"
+    metadata_path = output_dir / f"{stem}.localization.json"
+    # Old success metadata cannot survive a newly failed render.
+    remove_partial_outputs(input_path, (metadata_path, output_video))
     stage = time.perf_counter()
-    fast.render_video(input_path, voice_track, vi_srt, output_video)
+    try:
+        fast.render_video(input_path, voice_track, vi_srt, output_video)
+        if not rendered_video_is_usable(output_video):
+            raise RuntimeError("Dub rendering did not produce a decodable video")
+    except Exception:
+        remove_partial_outputs(input_path, (metadata_path, output_video))
+        raise
     timings["render"] = round(time.perf_counter() - stage, 3)
     timings["total"] = round(time.perf_counter() - started_total, 3)
 
-    metadata_path = output_dir / f"{stem}.localization.json"
     metadata = {
         "input": str(input_path),
         "detectedLanguage": detected_language,
