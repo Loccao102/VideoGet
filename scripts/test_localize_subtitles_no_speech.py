@@ -339,6 +339,7 @@ class SubtitleNoSpeechTests(unittest.TestCase):
                 mock.patch.object(module.base, "translate_segments", lambda *_: None, create=True),
                 mock.patch.object(module.base, "log"),
                 mock.patch.object(module.render_subtitles, "render", render, create=True),
+                mock.patch.object(module, "input_has_decodable_video_frame", return_value=True) as probe,
                 mock.patch.object(sys, "argv", [
                     "localize_subtitles.py", "--input", str(video),
                     "--output-dir", str(output)
@@ -352,6 +353,7 @@ class SubtitleNoSpeechTests(unittest.TestCase):
             self.assertEqual(result["segments"], 1)
             self.assertNotIn("skippedReason", result)
             self.assertEqual(rendered, ["quiet.vi-subbed.mp4"])
+            probe.assert_called_once_with(output / "quiet.vi-subbed.mp4")
             self.assertEqual(srt_files, [
                 ("quiet.original.srt", 1, "text"),
                 ("quiet.vi.srt", 1, "vi")
@@ -389,6 +391,40 @@ class SubtitleNoSpeechTests(unittest.TestCase):
                         module.main()
                 self.assertEqual(source.read_bytes(), b"original footage")
                 self.assertFalse((output / "video.subtitle.json").exists())
+
+    def test_render_rejects_nonempty_but_undecodable_video(self):
+        class SpeechModel:
+            def transcribe(self, _audio, **_kwargs):
+                return iter([types.SimpleNamespace(
+                    start=0.1, end=0.8, text="hello"
+                )]), types.SimpleNamespace(language="en")
+
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "video.mp4"
+            source.write_bytes(b"original video")
+            output = Path(folder) / "out"
+
+            def broken_render(_source, _srt, destination):
+                Path(destination).write_bytes(b"fake mp4 with nonzero bytes")
+
+            with (
+                mock.patch.object(module, "WhisperModel", return_value=SpeechModel()),
+                mock.patch.object(module.base, "run", create=True),
+                mock.patch.object(module.base, "log"),
+                mock.patch.object(module.base, "write_srt", create=True),
+                mock.patch.object(module.base, "translate_segments", create=True),
+                mock.patch.object(module.render_subtitles, "render", broken_render, create=True),
+                mock.patch.object(module, "input_has_decodable_video_frame", return_value=False) as probe,
+                mock.patch.object(sys, "argv", [
+                    "localize_subtitles.py", "--input", str(source),
+                    "--output-dir", str(output)
+                ]),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "decodable video frame"):
+                    module.main()
+            probe.assert_called_once_with(output / "video.vi-subbed.mp4")
+            self.assertEqual(source.read_bytes(), b"original video")
+            self.assertFalse((output / "video.subtitle.json").exists())
 
     def test_collect_segments_reindexes_nonempty_subtitles_without_gaps(self):
         raw = [
