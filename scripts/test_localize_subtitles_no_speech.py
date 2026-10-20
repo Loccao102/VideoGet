@@ -426,6 +426,47 @@ class SubtitleNoSpeechTests(unittest.TestCase):
             self.assertEqual(source.read_bytes(), b"original video")
             self.assertFalse((output / "video.subtitle.json").exists())
 
+    def test_failed_render_discards_partial_video_and_subtitles(self):
+        class SpeechModel:
+            def transcribe(self, _audio, **_kwargs):
+                return iter([types.SimpleNamespace(
+                    start=0.1, end=0.8, text="hello"
+                )]), types.SimpleNamespace(language="en")
+
+        for failure_kind in ("renderer_raises", "undecodable"):
+            with self.subTest(failure_kind=failure_kind), tempfile.TemporaryDirectory() as folder:
+                source = Path(folder) / "clip.mp4"
+                source.write_bytes(b"original footage")
+                output = Path(folder) / "out"
+
+                def write_srt(path, _segments, _key):
+                    Path(path).write_text("temporary subtitles", encoding="utf-8")
+
+                def partial_render(_source, _srt, destination):
+                    Path(destination).write_bytes(b"broken MP4 payload")
+                    if failure_kind == "renderer_raises":
+                        raise RuntimeError("ffmpeg rendering failed")
+
+                with (
+                    mock.patch.object(module, "WhisperModel", return_value=SpeechModel()),
+                    mock.patch.object(module.base, "run", create=True),
+                    mock.patch.object(module.base, "log"),
+                    mock.patch.object(module.base, "write_srt", write_srt, create=True),
+                    mock.patch.object(module.base, "translate_segments", create=True),
+                    mock.patch.object(module.render_subtitles, "render", partial_render, create=True),
+                    mock.patch.object(module, "input_has_decodable_video_frame", return_value=False),
+                    mock.patch.object(sys, "argv", [
+                        "localize_subtitles.py", "--input", str(source),
+                        "--output-dir", str(output)
+                    ]),
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "rendering failed|decodable video frame"):
+                        module.main()
+
+                self.assertEqual(source.read_bytes(), b"original footage")
+                for name in ("clip.original.srt", "clip.vi.srt", "clip.vi-subbed.mp4", "clip.subtitle.json"):
+                    self.assertFalse((output / name).exists(), f"partial output was kept: {name}")
+
     def test_collect_segments_reindexes_nonempty_subtitles_without_gaps(self):
         raw = [
             types.SimpleNamespace(start=0, end=1, text="hello"),
