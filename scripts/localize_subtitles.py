@@ -279,6 +279,11 @@ def main() -> None:
         # output (or an empty placeholder). Never print success metadata for it.
         if not output_video.is_file() or output_video.stat().st_size == 0:
             raise RuntimeError("Subtitle rendering did not produce a nonempty output video")
+        # A nonempty container can still contain damaged video frames.
+        # Decode only the first frame to catch unusable renders without
+        # re-encoding or scanning the full video.
+        if not input_has_decodable_video_frame(output_video):
+            raise RuntimeError("Subtitle rendering did not produce a decodable video frame")
         timings["render"] = round(time.perf_counter() - render_started, 3)
 
     timings["total"] = round(time.perf_counter() - started, 3)
