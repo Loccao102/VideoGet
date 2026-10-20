@@ -78,6 +78,31 @@ class WorkerOutputSafetyTests(unittest.TestCase):
             for path in stale:
                 self.assertFalse(path.exists(), str(path))
 
+    def test_failed_transcription_invalidates_previous_success(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "clip.mp4"
+            source.write_bytes(b"original source")
+            output = root / "out"
+            output.mkdir()
+            video = output / "clip.vi-dubbed.mp4"
+            metadata = output / "clip.localization.json"
+            video.write_bytes(b"previous successful render")
+            metadata.write_text("previous successful metadata")
+            cache = output / "clip.transcript.json"
+            cache.write_text("cache stays available")
+            with (
+                mock.patch.object(worker.base, "has_audio_stream", return_value=True, create=True),
+                mock.patch.object(worker, "transcribe",
+                                  side_effect=RuntimeError("transcription failed")),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "transcription failed"):
+                    worker.process_job(object(), str(source), str(output))
+            self.assertFalse(video.exists())
+            self.assertFalse(metadata.exists())
+            self.assertTrue(cache.is_file())
+            self.assertEqual(source.read_bytes(), b"original source")
+
     def test_source_symlink_is_preflight_protected(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
