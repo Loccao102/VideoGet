@@ -24,6 +24,32 @@ spec.loader.exec_module(worker)
 
 
 class WorkerOutputSafetyTests(unittest.TestCase):
+    def test_whisper_timestamps_must_be_finite_positive_and_ordered(self):
+        for start, end in (
+            (-1.0, 2.0), (2.0, 1.0), (0.0, 0.0),
+            (float("nan"), 2.0), (0.1, float("inf")),
+        ):
+            with self.subTest(start=start, end=end):
+                segment = types.SimpleNamespace(start=start, end=end, text="hello")
+                model = mock.Mock()
+                model.transcribe.return_value = (
+                    iter([segment]), types.SimpleNamespace(language="en")
+                )
+                with self.assertRaisesRegex(ValueError, "invalid segment timestamps"):
+                    worker.decode_segments(model, Path("fixture.mp4"), "en", 1)
+
+        model = mock.Mock()
+        model.transcribe.return_value = (
+            iter([
+                types.SimpleNamespace(start=0, end=0, text="   "),
+                types.SimpleNamespace(start=0.4, end=1.5, text="hello"),
+            ]), types.SimpleNamespace(language="en")
+        )
+        segments, _ = worker.decode_segments(model, Path("fixture.mp4"), "en", 1)
+        self.assertEqual(segments[0]["id"], 0)
+        self.assertEqual(segments[0]["start"], 0.4)
+        self.assertEqual(segments[0]["end"], 1.5)
+
     def test_silent_retry_removes_previous_outputs_but_never_source(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
