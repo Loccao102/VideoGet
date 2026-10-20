@@ -274,16 +274,25 @@ def main() -> None:
         base.write_srt(vi_srt, segments, "vi")
 
         render_started = time.perf_counter()
-        render_subtitles.render(input_path, vi_srt, output_video)
-        # A renderer may return without raising while leaving no playable
-        # output (or an empty placeholder). Never print success metadata for it.
-        if not output_video.is_file() or output_video.stat().st_size == 0:
-            raise RuntimeError("Subtitle rendering did not produce a nonempty output video")
-        # A nonempty container can still contain damaged video frames.
-        # Decode only the first frame to catch unusable renders without
-        # re-encoding or scanning the full video.
-        if not input_has_decodable_video_frame(output_video):
-            raise RuntimeError("Subtitle rendering did not produce a decodable video frame")
+        try:
+            render_subtitles.render(input_path, vi_srt, output_video)
+            # A renderer may return without raising while leaving no playable
+            # output (or an empty placeholder). Never print success metadata for it.
+            if not output_video.is_file() or output_video.stat().st_size == 0:
+                raise RuntimeError("Subtitle rendering did not produce a nonempty output video")
+            # A nonempty container can still contain damaged video frames.
+            # Decode only the first frame to catch unusable renders without
+            # re-encoding or scanning the full video.
+            if not input_has_decodable_video_frame(output_video):
+                raise RuntimeError("Subtitle rendering did not produce a decodable video frame")
+        except Exception:
+            # Rendering may write partial artifacts before throwing. Remove
+            # those unsuccessful outputs so later consumers never pick them up.
+            # The source video is preflight-protected by the cleanup helper.
+            clear_derived_artifacts(
+                input_path, (original_srt, vi_srt, output_video)
+            )
+            raise
         timings["render"] = round(time.perf_counter() - render_started, 3)
 
     timings["total"] = round(time.perf_counter() - started, 3)
