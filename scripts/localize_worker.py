@@ -51,9 +51,15 @@ def clean_video_title(stem: str) -> str:
 def source_signature(path: Path) -> dict:
     stat = path.stat()
     return {
-        "version": 2,
+        # Same-named videos can be staged in different directories or be
+        # overwritten while retaining their size and modified timestamp.
+        # Include source identity and filesystem change time in every
+        # downstream transcript/translation/TTS cache signature.
+        "version": 3,
+        "sourcePath": str(path.resolve()),
         "size": stat.st_size,
         "mtimeNs": stat.st_mtime_ns,
+        "ctimeNs": stat.st_ctime_ns,
         "whisperModel": os.getenv("WHISPER_MODEL", "small"),
         "whisperLanguage": os.getenv("WHISPER_LANGUAGE", "zh").strip(),
         "whisperBeamSize": env_int("WHISPER_BEAM_SIZE", 1, 1),
