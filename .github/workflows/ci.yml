@@ -23,6 +23,10 @@ jobs:
       - run: go vet ./...
       - run: go test ./...
       - run: go build ./...
+      - name: Subtitle-only no-speech regression
+        run: python scripts/test_localize_subtitles_no_speech.py
+      - name: Persistent worker output safety regression
+        run: python scripts/test_localize_worker_outputs.py
       - name: OCR decode proxy regression
         run: python scripts/test_ocr_decode_proxy.py
       - name: Aspect conversion regression
