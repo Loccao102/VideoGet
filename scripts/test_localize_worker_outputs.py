@@ -24,6 +24,32 @@ spec.loader.exec_module(worker)
 
 
 class WorkerOutputSafetyTests(unittest.TestCase):
+    def test_transcript_cache_signature_separates_identically_sized_sources(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            left = root / "one" / "clip.mp4"
+            right = root / "two" / "clip.mp4"
+            left.parent.mkdir()
+            right.parent.mkdir()
+            left.write_bytes(b"video AAA")
+            right.write_bytes(b"video BBB")
+            # Simulate two uploads with identical byte lengths and mtime.
+            import os
+            os.utime(left, ns=(1_700_000_000_000_000_000,) * 2)
+            os.utime(right, ns=(1_700_000_000_000_000_000,) * 2)
+            first = worker.source_signature(left)
+            second = worker.source_signature(right)
+            self.assertEqual(first["size"], second["size"])
+            self.assertEqual(first["mtimeNs"], second["mtimeNs"])
+            self.assertNotEqual(first, second)
+            self.assertEqual(first["sourcePath"], str(left.resolve()))
+            self.assertIn("ctimeNs", first)
+
+            cache = root / "clip.transcript.json"
+            worker.write_cache(cache, first, segments=[{"text": "first video"}])
+            self.assertIsNotNone(worker.read_cache(cache, first))
+            self.assertIsNone(worker.read_cache(cache, second))
+
     def test_whisper_timestamps_must_be_finite_positive_and_ordered(self):
         for start, end in (
             (-1.0, 2.0), (2.0, 1.0), (0.0, 0.0),
