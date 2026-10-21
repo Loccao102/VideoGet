@@ -50,6 +50,15 @@ class WorkerOutputSafetyTests(unittest.TestCase):
             self.assertIsNotNone(worker.read_cache(cache, first))
             self.assertIsNone(worker.read_cache(cache, second))
 
+    def test_corrupt_or_non_object_cache_is_ignored_safely(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / "clip.transcript.json"
+            signature = {"version": 3, "sourcePath": "fixture"}
+            for content in ('[]', 'null', '"unexpected"', '12', '{broken json'):
+                with self.subTest(content=content):
+                    cache.write_text(content, encoding="utf8")
+                    self.assertIsNone(worker.read_cache(cache, signature))
+
     def test_whisper_timestamps_must_be_finite_positive_and_ordered(self):
         for start, end in (
             (-1.0, 2.0), (2.0, 1.0), (0.0, 0.0),
