@@ -106,7 +106,7 @@ def tts_signature(translation_sig: dict) -> dict:
 def read_cache(path: Path, signature: dict) -> dict | None:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        if data.get("signature") == signature:
+        if isinstance(data, dict) and data.get("signature") == signature:
             return data
     except (OSError, json.JSONDecodeError, TypeError):
         pass
